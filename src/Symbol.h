@@ -34,7 +34,7 @@ struct Symbol
     Symbol()
         : symbolLength(0), kind(CXCursor_FirstInvalid), type(CXType_Invalid), linkage(CXLinkage_Invalid),
           flags(None), enumValue(0), startLine(-1), endLine(-1), startColumn(-1), endColumn(-1),
-          size(-1), fieldOffset(-1), alignment(-1)
+          size(0), fieldOffset(-1), alignment(-1)
     {}
 
     Location location;
@@ -88,8 +88,9 @@ struct Symbol
         TemplateSpecialization = 0x0100,
         InlineFunction         = 0x0200,
         ImplicitDestruction    = 0x0400,
-        Definition             = 0x0800,
-        FileSymbol             = 0x1000
+        TemplateReference      = 0x0800,
+        Definition             = 0x1000,
+        FileSymbol             = 0x2000
     };
     String briefComment, xmlComment;
     uint16_t flags;
@@ -99,7 +100,7 @@ struct Symbol
     };
     int32_t startLine, endLine;
     int16_t startColumn, endColumn;
-    int32_t size; // sizeof
+    uint16_t size; // sizeof
     int16_t fieldOffset, alignment; // bits
 
     bool isNull() const { return location.isNull() || clang_isInvalid(kind); }
@@ -154,18 +155,23 @@ struct Symbol
     inline bool isDefinition() const { return flags & Definition; }
 
     enum ToStringFlag {
-        DefaultFlags = 0x0,
-        IncludeTargets = 0x1,
-        IncludeReferences = 0x2,
-        IncludeParents = 0x4,
-        IncludeBaseClasses = 0x8
+        DefaultFlags = 0x00,
+        IncludeTargets = 0x01,
+        IncludeReferences = 0x02,
+        IncludeParents = 0x04,
+        IncludeBaseClasses = 0x08,
+        IncludeContainingFunction = 0x10,
+        IncludeContainingFunctionLocation = 0x20
+
     };
     Value toValue(const std::shared_ptr<Project> &project,
                   Flags<ToStringFlag> toStringFlags,
-                  Flags<Location::ToStringFlag> locationToStringFlags) const;
-    String toString(Flags<ToStringFlag> toStringFlags = DefaultFlags,
+                  Flags<Location::ToStringFlag> locationToStringFlags,
+                  const Set<String> &pieceFilters) const;
+    String toString(const std::shared_ptr<Project> &project = std::shared_ptr<Project>(),
+                    Flags<ToStringFlag> toStringFlags = DefaultFlags,
                     Flags<Location::ToStringFlag> = Flags<Location::ToStringFlag>(),
-                    const std::shared_ptr<Project> &project = std::shared_ptr<Project>()) const;
+                    const Set<String> &pieceFilters = Set<String>()) const;
     String kindSpelling() const { return kindSpelling(kind); }
     String displayName() const;
     static String kindSpelling(uint16_t kind);

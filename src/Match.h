@@ -1,3 +1,4 @@
+
 /* This file is part of RTags (http://rtags.net).
 
    RTags is free software: you can redistribute it and/or modify
@@ -37,13 +38,13 @@ public:
     inline Match()
     {}
 
-    inline Match(const String &pattern, Flags<Flag> flags = Flag_StringMatch)
-        : mFlags(flags)
-    {
-        if (flags & Flag_Regex)
-            mRegex = pattern.ref();
-        mPattern = pattern;
-    }
+    inline Match(const String &pattern, Flags<Flag> f = Flag_StringMatch);
+    inline Match(Match &&other) noexcept
+        : mRegex(std::move(other.mRegex)), mPattern(std::move(other.mPattern)), mFlags(other.mFlags)
+    {}
+    inline Match(const Match &other)
+        : mRegex(other.mRegex), mPattern(other.mPattern), mFlags(other.mFlags)
+    {}
 
     Flags<Flag> flags() const { return mFlags; }
 
@@ -105,6 +106,20 @@ inline Log operator<<(Log log, const Match &match)
     log << ret;
     return log;
 }
+
+inline Match::Match(const String &pattern, Flags<Flag> f)
+    : mFlags(f)
+{
+    if (mFlags & Flag_Regex) {
+        try {
+            mRegex = pattern.ref();
+        } catch (std::regex_error err) {
+            mFlags &= ~Flag_Regex;
+        }
+    }
+    mPattern = pattern;
+}
+
 
 
 
