@@ -75,14 +75,14 @@ public:
     virtual void log(Flags<LogFlag> /*flags*/, const char */*msg*/, int /*len*/) { }
     void log(const String &msg) { log(Flags<LogFlag>(DefaultFlags), msg.constData(), msg.length()); }
     template <int StaticBufSize = 256>
-    void log(const char *format, ...) RCT_PRINTF_WARNING(2, 3);
+    void vlog(const char *format, ...) RCT_PRINTF_WARNING(2, 3);
     LogLevel logLevel() const { return mLogLevel; }
 private:
     LogLevel mLogLevel;
 };
 
 template <int StaticBufSize>
-inline void LogOutput::log(const char *format, ...)
+inline void LogOutput::vlog(const char *format, ...)
 {
     va_list args;
     va_start(args, format);
@@ -111,8 +111,11 @@ enum LogFlag {
     Append = 0x01,
     DontRotate = 0x02,
     LogStderr = 0x04,
+#ifndef _WIN32
     LogSyslog = 0x08,
-    LogTimeStamp = 0x10
+#endif
+    LogTimeStamp = 0x10,
+    LogFlush = 0x20
 };
 RCT_FLAGS_OPERATORS(LogFlag);
 
@@ -145,6 +148,12 @@ public:
 #endif
     Log operator<<(unsigned long long number) { return addStringStream(number); }
     Log operator<<(long long number) { return addStringStream(number); }
+#ifdef _WIN32
+    /// at least on mingw64, this is required for the DWORD data type.
+    /// which is strange actually, because DWORD is an unsigned 32-bit integer
+    /// just like uint32_t.
+    Log operator<<(unsigned long number) { return addStringStream(number); }
+#endif
     Log operator<<(uint32_t number) { return addStringStream(number); }
     Log operator<<(int32_t number) { return addStringStream(number); }
     Log operator<<(uint16_t number) { return addStringStream(number); }
@@ -155,7 +164,7 @@ public:
     Log operator<<(double number) { return addStringStream(number); }
     Log operator<<(long double number) { return addStringStream(number); }
     Log operator<<(char ch) { return write(&ch, 1); }
-    Log operator<<(bool boolean) { return write(boolean ? "true" : "false"); }
+    Log operator<<(bool b) { return write(b ? "true" : "false"); }
     Log operator<<(void *ptr)
     {
         char buf[16];

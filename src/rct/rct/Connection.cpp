@@ -56,6 +56,7 @@ void Connection::checkData()
         onDataAvailable(mSocketClient, std::forward<Buffer>(mSocketClient->takeBuffer()));
 }
 
+#ifndef _WIN32
 bool Connection::connectUnix(const Path &socketFile, int timeout)
 {
     assert(!mSocketClient);
@@ -80,6 +81,7 @@ bool Connection::connectUnix(const Path &socketFile, int timeout)
     }
     return true;
 }
+#endif
 
 bool Connection::connectTcp(const String &host, uint16_t port, int timeout)
 {
@@ -111,7 +113,7 @@ int Connection::pendingWrite() const
     return mPendingWrite;
 }
 
-void Connection::onDataAvailable(const SocketClient::SharedPtr&, Buffer&& buf)
+void Connection::onDataAvailable(const SocketClient::SharedPtr &client, Buffer&& buf)
 {
     while (true) {
         if (!buf.isEmpty())
@@ -124,10 +126,10 @@ void Connection::onDataAvailable(const SocketClient::SharedPtr&, Buffer&& buf)
             if (available < static_cast<int>(sizeof(uint32_t)))
                 break;
             union {
-                unsigned char buf[sizeof(uint32_t)];
+                unsigned char b[sizeof(uint32_t)];
                 int pending;
             };
-            const int read = mBuffers.read(buf, 4);
+            const int read = mBuffers.read(b, 4);
             assert(read == 4);
             mPendingRead = pending;
             assert(mPendingRead > 0);
@@ -141,7 +143,8 @@ void Connection::onDataAvailable(const SocketClient::SharedPtr&, Buffer&& buf)
         const int read = mBuffers.read(buffer.buffer(), mPendingRead);
         assert(read == mPendingRead);
         mPendingRead = 0;
-        std::shared_ptr<Message> message = Message::create(mVersion, buffer, read);
+        Message::MessageError error;
+        std::shared_ptr<Message> message = Message::create(mVersion, buffer, read, &error);
         if (message) {
             auto that = shared_from_this();
             if (message->messageId() == FinishMessage::MessageId) {
@@ -150,12 +153,13 @@ void Connection::onDataAvailable(const SocketClient::SharedPtr&, Buffer&& buf)
             } else {
                 newMessage()(message, that);
             }
+        } else if (mErrorHandler) {
+            mErrorHandler(client, std::move(error));
         } else {
-            ::error() << "Unable to create message from data" << read;
+            ::error() << "Unable to create message from data" << error.type << error.text << read;
         }
         if (!message)
-            mSocketClient->close();
-    // mClient->dataAvailable().disconnect(this, &Connection::dataAvailable);
+            client->close();
     }
 }
 

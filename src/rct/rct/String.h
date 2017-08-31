@@ -19,18 +19,19 @@ class String
 {
 public:
     static const size_t npos = std::string::npos;
+    typedef size_t size_type;
 
     enum CaseSensitivity
     {
         CaseSensitive,
         CaseInsensitive
     };
-    String(const char *data = 0, size_t len = npos)
+    String(const char *ch = 0, size_t len = npos)
     {
-        if (data) {
+        if (ch) {
             if (len == npos)
-                len = strlen(data);
-            mString.assign(data, len);
+                len = strlen(ch);
+            mString.assign(ch, len);
         }
     }
     String(const char *start, const char *end)
@@ -62,28 +63,36 @@ public:
         return *this;
     }
 
-    void assign(const char *data, size_t len = npos)
+    void assign(const char *ch, size_t len = npos)
     {
-        if (data || !len) {
+        if (ch || !len) {
             if (len == npos)
-                len = strlen(data);
-            mString.assign(data, len);
+                len = strlen(ch);
+            mString.assign(ch, len);
         } else {
             clear();
         }
     }
 
+    typedef std::string::const_iterator const_iterator;
+    typedef std::string::iterator iterator;
+
+    const_iterator begin() const { return mString.begin(); }
+    const_iterator end() const { return mString.end(); }
+    iterator begin() { return mString.begin(); }
+    iterator end() { return mString.end(); }
+
     size_t lastIndexOf(char ch, size_t from = npos, CaseSensitivity cs = CaseSensitive) const
     {
         if (cs == CaseSensitive)
             return mString.rfind(ch, from == npos ? std::string::npos : size_t(from));
-        const char *data = mString.c_str();
+        const char *str = mString.c_str();
         if (from == npos)
             from = mString.size() - 1;
         ch = tolower(ch);
         int f = static_cast<int>(from);
         while (f >= 0) {
-            if (tolower(data[f]) == ch)
+            if (tolower(str[f]) == ch)
                 return from;
             --f;
         }
@@ -96,8 +105,8 @@ public:
             return mString.find(ch, from);
         const char *data = mString.c_str();
         ch = tolower(ch);
-        const size_t size = mString.size();
-        while (from < size) {
+        const size_t len = mString.size();
+        while (from < len) {
             if (tolower(data[from]) == ch)
                 return from;
             ++from;
@@ -262,25 +271,25 @@ public:
         Beginning,
         End
     };
-    String padded(Pad pad, size_t size, char fillChar = ' ', bool truncate = false) const
+    String padded(Pad pad, size_t len, char fillChar = ' ', bool trunc = false) const
     {
         const size_t l = length();
-        if (l == size) {
+        if (l == len) {
             return *this;
-        } else if (l > size) {
-            if (!truncate)
+        } else if (l > len) {
+            if (!trunc)
                 return *this;
             if (pad == Beginning) {
-                return right(size);
+                return right(len);
             } else {
-                return left(size);
+                return left(len);
             }
         } else {
             String ret = *this;
             if (pad == Beginning) {
-                ret.prepend(String(size - l, fillChar));
+                ret.prepend(String(len - l, fillChar));
             } else {
-                ret.append(String(size - l, fillChar));
+                ret.append(String(len - l, fillChar));
             }
             return ret;
         }
@@ -344,10 +353,10 @@ public:
         return size();
     }
 
-    void truncate(size_t size)
+    void truncate(size_t len)
     {
-        if (mString.size() > size)
-            mString.resize(size);
+        if (mString.size() > len)
+            mString.resize(len);
     }
 
     void chop(size_t s)
@@ -355,14 +364,14 @@ public:
         mString.resize(size() - s);
     }
 
-    void resize(size_t size)
+    void resize(size_t len)
     {
-        mString.resize(size);
+        mString.resize(len);
     }
 
-    void reserve(size_t size)
+    void reserve(size_t len)
     {
-        mString.reserve(size);
+        mString.reserve(len);
     }
 
     void prepend(const String &other)
@@ -443,6 +452,26 @@ public:
         return ret;
     }
 
+    iterator erase(const_iterator begin, const_iterator end)
+    {
+#ifdef HAVE_STRING_ITERATOR_ERASE
+        return mString.erase(begin, end);
+#else
+        if (begin >= end) {
+            return mString.end();
+        }
+
+        const size_t offset = begin - mString.begin();
+        mString.erase(offset, end - begin);
+        return mString.begin() + offset;
+#endif
+    }
+
+    String& erase(size_t index = 0, size_t count = npos)
+    {
+        mString.erase(index, count);
+        return *this;
+    }
 
     void remove(size_t idx, size_t count)
     {
@@ -649,36 +678,36 @@ public:
     {
         List<String> ret;
         if (!isEmpty()) {
-            size_t last = 0;
+            size_t prev = 0;
             const size_t add = flags & KeepSeparators ? 1 : 0;
             while (1) {
-                const size_t next = indexOf(ch, last);
+                const size_t next = indexOf(ch, prev);
                 if (next == npos)
                     break;
-                if (next > last || !(flags & SkipEmpty))
-                    ret.append(mid(last, next - last + add));
-                last = next + 1;
+                if (next > prev || !(flags & SkipEmpty))
+                    ret.append(mid(prev, next - prev + add));
+                prev = next + 1;
             }
-            if (last < size() || !(flags & SkipEmpty))
-                ret.append(mid(last));
+            if (prev < size() || !(flags & SkipEmpty))
+                ret.append(mid(prev));
         }
         return ret;
     }
 
-    List<String> split(const String &split, unsigned int flags = NoSplitFlag) const
+    List<String> split(const String &str, unsigned int flags = NoSplitFlag) const
     {
         List<String> ret;
-        size_t last = 0;
+        size_t prev = 0;
         while (1) {
-            const size_t next = indexOf(split, last);
+            const size_t next = indexOf(str, prev);
             if (next == npos)
                 break;
-            if (next > last || !(flags & SkipEmpty))
-                ret.append(mid(last, next - last));
-            last = next + split.size();
+            if (next > prev || !(flags & SkipEmpty))
+                ret.append(mid(prev, next - prev));
+            prev = next + str.size();
         }
-        if (last < size() || !(flags & SkipEmpty))
-            ret.append(mid(last));
+        if (prev < size() || !(flags & SkipEmpty))
+            ret.append(mid(prev));
         return ret;
     }
 
@@ -741,9 +770,14 @@ public:
         }
 
         char buf[32];
+#ifdef _WIN32
+        tm *tm = localtime(&t);
+        const size_t w = strftime(buf, sizeof(buf), format, tm);
+#else
         tm tm;
         localtime_r(&t, &tm);
         const size_t w = strftime(buf, sizeof(buf), format, &tm);
+#endif
         return String(buf, w);
     }
 
@@ -808,7 +842,9 @@ public:
     static String number(double num, size_t prec = 2)
     {
         char format[32];
-        snprintf(format, sizeof(format), "%%.%zuf", prec);
+
+        // cast to unsigned because windows doesn't have %z format specifier
+        snprintf(format, sizeof(format), "%%.%uf", (unsigned)prec);
         char buf[32];
         const size_t w = ::snprintf(buf, sizeof(buf), format, num);
         return String(buf, w);

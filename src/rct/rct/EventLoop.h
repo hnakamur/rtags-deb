@@ -1,6 +1,7 @@
 #ifndef EVENTLOOP_H // -*- mode:c++ -*-
 #define EVENTLOOP_H
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -16,11 +17,15 @@
 #if defined(HAVE_EPOLL)
 #  include <sys/epoll.h>
 #elif defined(HAVE_KQUEUE)
+#  include <sys/types.h>
 #  include <sys/event.h>
 #  include <sys/time.h>
-#  include <sys/types.h>
 #elif defined(HAVE_SELECT)
-#  include <sys/select.h>
+#  ifdef _WIN32
+#    include <Winsock2.h>
+#  else
+#    include <sys/select.h>
+#  endif
 #endif
 
 class Event
@@ -97,7 +102,7 @@ public:
 
     void init(unsigned int flags = None);
 
-    unsigned int flags() const { return flgs; }
+    unsigned int flags() const { return mFlags; }
 
     template<typename T>
     static void deleteLater(T* del)
@@ -143,21 +148,34 @@ public:
     void unregisterSocket(int fd);
     unsigned int processSocket(int fd, int timeout = -1);
 
-    // See Timer.h for the flags
+    /**
+     * @param timeout timeout in ms
+     * @param flags see Timer.h
+     */
     int registerTimer(std::function<void(int)>&& func, int timeout, unsigned int flags = 0);
     void unregisterTimer(int id);
 
-    // Changes to the inactivity timeout while the loop is running may
-    // not be honoured.
-    void setInactivityTimeout(int timeout);
+    /**
+     *  Changes to the inactivity timeout while the loop is running may
+     *  not be honoured.
+     *  @param timeout unit: ms
+     */
+    void setInactivityTimeout(int timeout) { mInactivityTimeout = timeout; }
+    int inactivityTimeout() const { return mInactivityTimeout; }
 
     enum { Success = 0x100, GeneralError = 0x200, Timeout = 0x400 };
+
+    /**
+     *  Run the EventLoop until there are no more pending events or a timeout
+     *  occurs.
+     *  @param timeout Unit: milliseconds. -1 for no timeout.
+     */
     unsigned int exec(int timeout = -1);
     void quit();
 
     //bool isRunning() const { std::lock_guard<std::mutex> locker(mutex); return !mExecStack.empty(); }
 
-    static EventLoop::SharedPtr mainEventLoop() { std::lock_guard<std::mutex> locker(mainMutex); return mainLoop.lock(); }
+    static EventLoop::SharedPtr mainEventLoop() { std::lock_guard<std::mutex> locker(mMainMutex); return sMainLoop.lock(); }
     static EventLoop::SharedPtr eventLoop();
     static void cleanupLocalEventLoop();
 
@@ -185,17 +203,17 @@ private:
     static void error(const char* err);
 
 private:
-    static std::mutex mainMutex;
-    mutable std::mutex mutex;
+    static std::mutex mMainMutex;
+    mutable std::mutex mMutex;
     std::thread::id threadId;
 
-    std::queue<Event*> events;
-    int eventPipe[2];
+    std::queue<Event*> mEvents;
+    int mEventPipe[2];
 #if defined(HAVE_EPOLL) || defined(HAVE_KQUEUE)
-    int pollFd;
+    int mPollFd;
 #endif
 
-    std::map<int, std::pair<unsigned int, std::function<void(int, unsigned int)> > > sockets;
+    std::map<int, std::pair<unsigned int, std::function<void(int, unsigned int)> > > mSockets;
 
     class TimerData
     {
@@ -248,18 +266,18 @@ private:
     };
     typedef std::multiset<TimerData*, TimerDataSet> TimersByTime;
     typedef std::unordered_set<TimerData*, TimerDataHash, TimerDataHash> TimersById;
-    TimersByTime timersByTime;
-    TimersById timersById;
-    uint32_t nextTimerId;
+    TimersByTime mTimersByTime;
+    TimersById mTimersById;
+    uint32_t mNextTimerId;
 
-    bool stop;
-    bool timeout;
+    bool mStop;
+    bool mTimeout;
 
-    static EventLoop::WeakPtr mainLoop;
+    static EventLoop::WeakPtr sMainLoop;
 
-    unsigned int flgs;
+    unsigned int mFlags;
 
-    int inactivityTimeout;
+    int mInactivityTimeout;
 private:
     EventLoop(const EventLoop&) = delete;
     EventLoop& operator=(const EventLoop&) = delete;

@@ -13,7 +13,7 @@ if (RTAGS_BUILD_CLANG)
     ExternalProject_Add(llvmclang
         DOWNLOAD_COMMAND ${PROJECT_SOURCE_DIR}/scripts/getclang.sh 3.8.1
         SOURCE_DIR llvmclang-prefix/src/llvm
-        CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${CLANG_INSTALL_PATH} -DLLVM_BUILD_TOOLS=0
+        CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${CLANG_INSTALL_PATH} -DLLVM_BUILD_TOOLS=1
         LOG_DOWNLOAD 1            # Wrap download in script to log output
         LOG_UPDATE 1              # Wrap update in script to log output
         LOG_CONFIGURE 1           # Wrap configure in script to log output
@@ -21,12 +21,10 @@ if (RTAGS_BUILD_CLANG)
         LOG_TEST 1                # Wrap test in script to log output
         LOG_INSTALL 1             # Wrap install in script to log output
         )
-    set(LIBCLANG_LIBRARIES "${CLANG_INSTALL_PATH}/lib/libclang${CMAKE_SHARED_LIBRARY_SUFFIX}")
-    set(LIBCLANG_CXXFLAGS "-I${CLANG_INSTALL_PATH}/include -fPIC  -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS")
-    set(LIBCLANG_LIBDIR "${CLANG_INSTALL_PATH}/lib")
     if (CMAKE_SYSTEM_NAME MATCHES "Darwin")
         add_definitions("-DCLANG_INCLUDE=${CLANG_INSTALL_PATH}/include/c++/v1") # add libcxx include
     endif ()
+    set(LIBCLANG_LLVM_CONFIG_EXECUTABLE ${CLANG_INSTALL_PATH}/bin/llvm-config)
 endif ()
 
 
@@ -41,7 +39,7 @@ endif ()
 # Set RPATH when installing to a custom (non-system) directory
 list(FIND CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES "${CMAKE_INSTALL_PREFIX}/lib" isSystemDir)
 if ("${isSystemDir}" STREQUAL "-1")
-    set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH}:${CMAKE_INSTALL_PREFIX}/lib")
+    list(APPEND CMAKE_INSTALL_RPATH ${CMAKE_INSTALL_PREFIX}/lib)
 endif ()
 
 include(${CMAKE_SOURCE_DIR}/cmake/EnsureLibraries.cmake)
@@ -63,15 +61,43 @@ if (NOT DEFINED LIBCLANG_LIBRARIES OR NOT DEFINED LIBCLANG_CXXFLAGS OR NOT DEFIN
 endif ()
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LIBCLANG_CXXFLAGS}")
 
+if (NOT RTAGS_BUILD_CLANG)
+    set(LIBCLANG_COMPILE_TEST "
+#include <clang-c/Index.h>
+
+int main()
+{
+    CXIndex index = clang_createIndex(0, true);
+    CXTranslationUnit unit = clang_parseTranslationUnit(index, 0, 0, 0, 0, 0, 0);
+    clang_disposeTranslationUnit(unit);
+    clang_disposeIndex(index);
+    return 0;
+}
+")
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_OLD_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
+    set(CMAKE_OLD_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES})
+    set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS} ${CMAKE_CXX_FLAGS} ${LIBCLANG_CXXFLAGS})
+    set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} ${LIBCLANG_LIBRARIES})
+    check_cxx_source_compiles("${LIBCLANG_COMPILE_TEST}" LIBCLANG_COMPILES)
+    if (NOT LIBCLANG_COMPILES)
+        message(FATAL_ERROR "We can't seem to compile a small clang test app. Maybe you need to install the libclang dev package?")
+    endif ()
+    set(CMAKE_REQUIRED_FLAGS ${CMAKE_OLD_REQUIRED_FLAGS})
+    set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_OLD_REQUIRED_LIBRARIES})
+endif ()
+
 if (EXISTS ${CLANG_COMPILATION_INCLUDE})
     add_definitions(-DHAVE_CXCOMPILATIONDATABASE)
 endif ()
 
-ExternalProject_Add(lua
-    DOWNLOAD_COMMAND ""
-    SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/lua
-    INSTALL_COMMAND ""
-    CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=0 -DCMAKE_GENERATOR=${CMAKE_GENERATOR})
+if (LUA_ENABLED)
+    ExternalProject_Add(lua
+        DOWNLOAD_COMMAND ""
+        SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/lua
+        INSTALL_COMMAND ""
+        CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=0 -DCMAKE_GENERATOR=${CMAKE_GENERATOR})
+endif ()
 
 set(RCT_RTTI_ENABLED 1)
 set(RCT_NO_INSTALL 1)
@@ -95,6 +121,7 @@ endif ()
 add_definitions(
     "-DRTAGS_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
     "-DCLANG_LIBDIR=${LIBCLANG_LIBDIR}"
+    "-DCLANG_VERSION=${LIBCLANG_VERSION_STRING}"
     "-DOS_${CMAKE_SYSTEM_NAME}"
     ${RCT_DEFINITIONS})
 
@@ -105,7 +132,6 @@ endif ()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 
 set(RTAGS_SOURCES
-    AST.cpp
     ClangIndexer.cpp
     ClangThread.cpp
     ClassHierarchyJob.cpp
@@ -118,6 +144,7 @@ set(RTAGS_SOURCES
     FollowLocationJob.cpp
     IncludeFileJob.cpp
     IndexMessage.cpp
+    IndexParseData.cpp
     IndexerJob.cpp
     JobScheduler.cpp
     ListSymbolsJob.cpp
@@ -142,11 +169,17 @@ set(RTAGS_SOURCES
     TokensJob.cpp
     ${RCT_SOURCES})
 
+if (LUA_ENABLED)
+    list(APPEND RTAGS_SOURCES AST.cpp)
+endif ()
+
 add_library(rtags STATIC ${RTAGS_SOURCES})
 if (RTAGS_BUILD_CLANG)
     add_dependencies(rtags llvmclang)
 endif ()
-add_dependencies(rtags lua)
+if (LUA_ENABLED)
+    add_dependencies(rtags lua)
+endif ()
 
 if (RTAGS_COTIRE)
     include(cotire)
@@ -169,15 +202,18 @@ else ()
     set(END_GROUP "-Wl,--end-group")
 endif ()
 
-set(RTAGS_LIBRARIES rtags ${START_GROUP} ${LIBCLANG_LIBRARIES} ${END_GROUP} -L${CMAKE_CURRENT_BINARY_DIR}/lua-prefix/src/lua-build/ liblua.a)
+set(RTAGS_LIBRARIES rtags ${START_GROUP} ${LIBCLANG_LIBRARIES} ${END_GROUP})
+if (LUA_ENABLED)
+    list(APPEND RTAGS_LIBRARIES -L${CMAKE_CURRENT_BINARY_DIR}/lua-prefix/src/lua-build/ liblua.a)
+    add_definitions(-DRTAGS_HAS_LUA)
+endif ()
 
-add_definitions(-DRTAGS_HAS_LUA)
 if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     set_source_files_properties(AST.cpp PROPERTIES
-        COMPILE_FLAGS "-Wno-unused-parameter -Wno-unused-variable -ftemplate-depth=2000 -Wno-cast-qual")
+        COMPILE_FLAGS "-Wno-unused-parameter -Wno-unused-variable -ftemplate-depth=2000 -Wno-cast-qual -Wno-shadow")
 else ()
     set_source_files_properties(AST.cpp PROPERTIES
-        COMPILE_FLAGS "-Wno-unused-but-set-parameter -Wno-unused-parameter -Wno-unused-variable -ftemplate-depth=2000 -Wno-cast-qual")
+        COMPILE_FLAGS "-Wno-unused-but-set-parameter -Wno-unused-parameter -Wno-unused-variable -ftemplate-depth=2000 -Wno-cast-qual -Wno-shadow")
 endif()
 
 # RCT_LIBRARIES and stdc++ library must be at the end
@@ -225,11 +261,13 @@ endif ()
 
 set(RTAGS_ELISP_FILES
     rtags.el
-    rtags-ac.el
+    ac-rtags.el
+    helm-rtags.el
+    ivy-rtags.el
     company-rtags.el
     flycheck-rtags.el)
 
-if (NOT RTAGS_NO_LUA_FILES AND LUA_FOUND AND NOT ${CMAKE_CURRENT_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
+if (LUA_ENABLED AND NOT RTAGS_NO_LUA_FILES AND LUA_FOUND AND NOT ${CMAKE_CURRENT_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/rtags.lua
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/rtags.lua ${CMAKE_CURRENT_BINARY_DIR}/rtags.lua
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/rtags.lua
@@ -281,4 +319,9 @@ install(FILES ../bin/gcc-rtags-wrapper.sh DESTINATION bin
 install(FILES ../man/man7/rc.7 ../man/man7/rdm.7 DESTINATION share/man/man7/)
 if (NOT RTAGS_NO_ELISP_FILES)
     install(FILES ${RTAGS_ELISP_SOURCES} DESTINATION ${RTAGS_ELISP_INSTALL_LOCATION})
+endif ()
+
+if (CLANGTEST_ENABLED)
+    add_executable(clangtest clangtest.c)
+    target_link_libraries(clangtest ${LIBCLANG_LIBRARIES})
 endif ()

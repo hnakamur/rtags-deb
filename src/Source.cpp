@@ -23,10 +23,9 @@
 
 void Source::clear()
 {
-    fileId = compilerId = buildRootId = 0;
+    fileId = compilerId = buildRootId = compileCommandsFileId = 0;
     includePathHash = 0;
     language = NoLanguage;
-    parsed = 0;
 
     defines.clear();
     includePaths.clear();
@@ -43,6 +42,11 @@ Path Source::buildRoot() const
     return Location::path(buildRootId);
 }
 
+Path Source::compileCommands() const
+{
+    return Location::path(compileCommandsFileId);
+}
+
 Path Source::compiler() const
 {
     return Location::path(compilerId);
@@ -50,13 +54,11 @@ Path Source::compiler() const
 
 String Source::toString() const
 {
-    String ret = String::join(toCommandLine(IncludeCompiler|IncludeSourceFile|IncludeIncludePaths|QuoteDefines|IncludeDefines), ' ');
+    String ret = String::join(toCommandLine(IncludeCompiler|IncludeSourceFile|IncludeIncludePaths|QuoteDefines|IncludeDefines|IncludeOutputFilename), ' ');
     if (buildRootId)
         ret << " Build: " << buildRoot();
-    if (parsed)
-        ret << " Parsed: " << String::formatTime(parsed / 1000, String::DateTime);
-    if (flags & Active)
-        ret << " Active";
+    if (compileCommandsFileId)
+        ret << " compile_commands: " << compileCommands();
     return ret;
 }
 
@@ -113,42 +115,6 @@ static bool isWrapper(const char *name)
 {
     return (!strcmp(name, "gcc-rtags-wrapper.sh") || !strcmp(name, "icecc"));
 }
-static Path findFileInPath(const Path &unresolved, const Path &cwd, const List<Path> &pathEnvironment)
-{
-    // error() << "Coming in with" << front;
-    Path resolve;
-    Path file;
-    if (unresolved.isAbsolute()) {
-        resolve = unresolved;
-    } else if (unresolved.contains('/')) {
-        assert(cwd.endsWith('/'));
-        resolve = cwd + unresolved;
-    } else {
-        file = unresolved;
-    }
-
-    if (!resolve.isEmpty()) {
-        const Path resolved = resolve.resolved();
-        if (isWrapper(resolved.fileName())) {
-            file = unresolved.fileName();
-        } else {
-            return resolve;
-        }
-        file = unresolved.fileName();
-    }
-
-    for (const Path &path : pathEnvironment) {
-        bool ok;
-        const Path p = Path::resolved(file, Path::RealPath, path, &ok);
-        if (ok) {
-            if (!isWrapper(p.fileName()) && !access(p.constData(), R_OK | X_OK)) {
-                debug() << "Found compiler" << p << "for" << unresolved;
-                return Path::resolved(file, Path::MakeAbsolute, path);
-            }
-        }
-    }
-    return unresolved;
-}
 
 static inline String trim(const char *start, int size)
 {
@@ -162,12 +128,16 @@ static inline String trim(const char *start, int size)
     return String(start, size);
 }
 
-static inline size_t hashIncludePaths(const List<Source::Include> &includes, const Path &buildRoot)
+static inline size_t hashIncludePaths(const List<Source::Include> &includes, const Path &buildRoot, Flags<Server::Option> flags)
 {
     size_t hash = 0;
     std::hash<Path> hasher;
     for (const auto &inc : includes) {
         size_t h;
+        if (flags & Server::SourceIgnoreIncludePathDifferencesInUsr && inc.path.startsWith("/usr/") && !inc.path.startsWith("/usr/home/")) {
+            continue;
+        }
+
         if (!buildRoot.isEmpty() && inc.path.startsWith(buildRoot)) {
             h = hasher(inc.path.mid(buildRoot.size()));
         } else {
@@ -180,23 +150,6 @@ static inline size_t hashIncludePaths(const List<Source::Include> &includes, con
         // apparently from boost.
     }
     return hash;
-}
-
-static inline void addIncludeArg(List<Source::Include> &includePaths,
-                                 Source::Include::Type type,
-                                 size_t argLen,
-                                 const List<String> &args,
-                                 int &idx,
-                                 const Path &cwd)
-{
-    const String &arg = args.at(idx);
-    Path path;
-    if (arg.size() == argLen) {
-        path = Path::resolved(args.value(++idx), Path::MakeAbsolute, cwd);
-    } else {
-        path = Path::resolved(arg.mid(argLen), Path::MakeAbsolute, cwd);
-    }
-    includePaths.append(Source::Include(type, path));
 }
 
 static const char *valueArgs[] = {
@@ -230,6 +183,7 @@ static const char *valueArgs[] = {
 };
 
 static const char *blacklist[] = {
+    "--param",
     "-M",
     "-MD",
     "-MF",
@@ -240,8 +194,11 @@ static const char *blacklist[] = {
     "-MQ",
     "-MT",
     "-Og",
+    "-Wa,--32",
+    "-Wa,--64",
     "-Wl,--incremental-full",
     "-Wl,--incremental-patch,1",
+    "-Wl,--no-incremental",
     "-fbuild-session-file=",
     "-fbuild-session-timestamp=",
     "-fembed-bitcode",
@@ -251,6 +208,7 @@ static const char *blacklist[] = {
     "-fno-use-linker-plugin"
     "-fno-var-tracking",
     "-fno-var-tracking-assignments",
+    "-fno-enforce-eh-specs",
     "-fvar-tracking",
     "-fvar-tracking-assignments",
     "-fvar-tracking-assignments-toggle",
@@ -259,7 +217,8 @@ static const char *blacklist[] = {
     "-masm=",
     "-mcpu=",
     "-mfpmath=",
-    "-mtune="
+    "-mtune=",
+    "-s"
 };
 
 static int compare(const void *s1, const void *s2)
@@ -316,31 +275,12 @@ static inline String unquote(const String &arg)
     return arg;
 }
 
-static std::mutex sMutex;
-
-static Path resolveCompiler(const Path &unresolved, const Path &cwd, const List<Path> &pathEnvironment)
-{
-    std::unique_lock<std::mutex> lock(sMutex);
-    static Hash<Path, Path> resolvedFromPath;
-    Path &compiler = resolvedFromPath[unresolved];
-    if (compiler.isEmpty())
-        compiler = findFileInPath(unresolved, cwd, pathEnvironment);
-
-    if (!compiler.isFile()) {
-        compiler.clear();
-    } else if (compiler.contains("..")) {
-        compiler.canonicalize();
-    }
-    return compiler;
-}
-
-
 static inline bool isCompiler(const Path &fullPath, const List<String> &environment)
 {
-    std::unique_lock<std::mutex> lock(sMutex);
-    assert(Server::instance());
     if (Server::instance()->options().compilerWrappers.contains(fullPath.fileName()))
         return true;
+    if (strcasestr(fullPath.fileName(), "emacs"))
+        return false;
     static Hash<Path, bool> sCache;
 
     bool ok;
@@ -384,15 +324,119 @@ static inline bool isCompiler(const Path &fullPath, const List<String> &environm
     return !proc.returnCode();
 }
 
+enum Mode {
+    Mode_Executable,
+    Mode_Compiler
+};
+static std::pair<Path, bool> resolveCompiler(const Path &unresolved,
+                                             const Path &cwd,
+                                             const List<String> environment,
+                                             const List<Path> &pathEnvironment,
+                                             SourceCache *cache)
+{
+    std::pair<Path, bool> dummy;
+    auto &compiler = cache ? cache->compilerCache[unresolved] : dummy;
+    if (compiler.first.isEmpty()) {
+        // error() << "Coming in with" << unresolved << cwd << pathEnvironment;
+        Path resolve;
+        Path file;
+        if (unresolved.isAbsolute()) {
+            resolve = unresolved;
+        } else if (unresolved.contains('/')) {
+            assert(cwd.endsWith('/'));
+            resolve = cwd + unresolved;
+        } else {
+            file = unresolved;
+        }
+
+        if (!resolve.isEmpty()) {
+            const Path resolved = resolve.resolved();
+            if (isWrapper(resolved.fileName())) {
+                file = unresolved.fileName();
+            } else {
+                compiler.first = resolve;
+            }
+        }
+
+        if (compiler.first.isEmpty()) {
+            for (const Path &path : pathEnvironment) {
+                bool ok;
+                const Path p = Path::resolved(file, Path::RealPath, path, &ok);
+                if (ok) {
+                    if (!isWrapper(p.fileName()) && !access(p.constData(), R_OK | X_OK)) {
+                        debug() << "Found compiler" << p << "for" << unresolved;
+                        compiler.first = Path::resolved(file, Path::MakeAbsolute, path);
+                        break;
+                    }
+                }
+            }
+        }
+        if (!compiler.first.isFile()) {
+            compiler.first.clear();
+        } else {
+            if (compiler.first.contains(".."))
+                compiler.first.canonicalize();
+            compiler.second = isCompiler(compiler.first, environment);
+        }
+    }
+
+    return compiler;
+}
+
+static List<String> splitCommandLine(const String &cmdLine)
+{
+    List<String> split;
+    char quote = '\0';
+    const char *cur = cmdLine.data();
+    const char *prev = cur;
+    int size = cmdLine.size();
+    int escape = 0;
+    while (size > 0) {
+        switch (*cur) {
+        case '"':
+        case '\'':
+            if (escape % 2 == 0) {
+                if (quote == '\0') {
+                    quote = *cur;
+                } else if (*cur == quote) {
+                    quote = '\0';
+                }
+            }
+            escape = 0;
+            break;
+        case '\\':
+            ++escape;
+            break;
+        case ' ':
+            if (quote == '\0') {
+                if (cur > prev)
+                    split.append(unquote(trim(prev, cur - prev)));
+                prev = cur + 1;
+            }
+            escape = 0;
+            break;
+        default:
+            escape = 0;
+            break;
+        }
+        --size;
+        ++cur;
+    }
+    if (cur > prev)
+        split.append(trim(prev, cur - prev));
+    return split;
+}
+
 struct Input {
-    Path realPath, absolute;
+    Path realPath, absolute, unmolested;
     Source::Language language;
 };
 
-List<Source> Source::parse(const String &cmdLine,
-                           const Path &cwd,
-                           const List<String> &environment,
-                           List<Path> *unresolvedInputLocations)
+SourceList Source::parse(const String &cmdLine,
+                         const Path &cwd,
+                         const List<String> &environment,
+                         List<Path> *unresolvedInputLocations,
+                         SourceCache *cache)
 {
     List<Path> pathEnvironment;
     for (const String &env : environment) {
@@ -403,52 +447,11 @@ List<Source> Source::parse(const String &cmdLine,
     }
     assert(cwd.endsWith('/'));
     assert(!unresolvedInputLocations || unresolvedInputLocations->isEmpty());
-    String args = cmdLine;
-    char quote = '\0';
-    List<String> split;
-    {
-        char *cur = args.data();
-        char *prev = cur;
-        int size = args.size();
-        int escape = 0;
-        while (size > 0) {
-            switch (*cur) {
-            case '"':
-            case '\'':
-                if (escape % 2 == 0) {
-                    if (quote == '\0') {
-                        quote = *cur;
-                    } else if (*cur == quote) {
-                        quote = '\0';
-                    }
-                }
-                escape = 0;
-                break;
-            case '\\':
-                ++escape;
-                break;
-            case ' ':
-                if (quote == '\0') {
-                    if (cur > prev)
-                        split.append(unquote(trim(prev, cur - prev)));
-                    prev = cur + 1;
-                }
-                escape = 0;
-                break;
-            default:
-                escape = 0;
-                break;
-            }
-            --size;
-            ++cur;
-        }
-        if (cur > prev)
-            split.append(trim(prev, cur - prev));
-    }
-    debug() << "Source::parse (" << args << ") => " << split << cwd;
+    List<String> split = splitCommandLine(cmdLine);
+    debug() << "Source::parse (" << cmdLine << ") => " << split << cwd;
 
     for (size_t i=0; i<split.size(); ++i) {
-        if (split.at(i) == "cd" || !findFileInPath(split.at(i), cwd, pathEnvironment).isEmpty()) {
+        if (split.at(i) == "cd" || !resolveCompiler(split.at(i), cwd, environment, pathEnvironment, cache).first.isEmpty()) {
             if (i) {
                 split.remove(0, i);
             }
@@ -458,7 +461,7 @@ List<Source> Source::parse(const String &cmdLine,
 
     if (split.isEmpty()) {
         warning() << "Source::parse No args" << cmdLine;
-        return List<Source>();
+        return SourceList();
     }
 
     Path path;
@@ -470,7 +473,28 @@ List<Source> Source::parse(const String &cmdLine,
     }
     if (split.isEmpty()) {
         warning() << "Source::parse No args" << cmdLine;
-        return List<Source>();
+        return SourceList();
+    }
+
+    // expand any response file references
+    for (size_t i=0; i<split.size(); ++i) {
+        auto arg = split.at(i);
+        if (!arg.startsWith('@'))
+            continue;
+        arg.remove(0, 1);
+        Path responseFile = Path::resolved(arg, Path::MakeAbsolute, cwd);
+        if (!responseFile.isFile())
+            continue;
+        auto contents = responseFile.readAll();
+        if (contents.isEmpty())
+            continue;
+        contents.chomp("\r\n\t ");
+        List<String> subcommands = splitCommandLine(contents);
+        if (!subcommands.isEmpty()) {
+            split.removeAt(i);
+            split.insert(i, subcommands);
+            i += subcommands.size() - 1;
+        }
     }
 
     List<Input> inputs;
@@ -479,9 +503,9 @@ List<Source> Source::parse(const String &cmdLine,
     List<String> arguments;
     Set<Define> defines;
     List<Include> includePaths;
-    int32_t sysRootIndex = -1;
     uint32_t buildRootId = 0;
     Path buildRoot;
+    Path outputFilename;
     uint32_t compilerId = 0;
     uint64_t includePathHash = 0;
     bool validCompiler = false;
@@ -497,12 +521,17 @@ List<Source> Source::parse(const String &cmdLine,
             (arg.startsWith('"') && arg.endsWith('"')))
             arg = arg.mid(1, arg.size() - 2);
         // ### is this even right?
-        if (arg.startsWith('-')) {
+        if (arg.size() > 1 && arg.startsWith('-')) {
             if (arg == "-E") {
                 warning() << "Preprocessing, ignore" << cmdLine;
-                return List<Source>();
-            } else if (arg == "-x") {
-                const String a = split.value(++i);
+                return SourceList();
+            } else if (arg.startsWith("-x")) {
+                String a;
+                if (arg.size() == 2) {
+                    a = split.value(++i);
+                } else {
+                    a = arg.mid(2);
+                }
                 if (a == "c-header") {
                     language = CHeader;
                 } else if (a == "c++-header") {
@@ -516,7 +545,7 @@ List<Source> Source::parse(const String &cmdLine,
                 } else if (a == "objective-c++") {
                     language = ObjectiveCPlusPlus;
                 } else {
-                    return List<Source>();
+                    return SourceList();
                 }
                 arguments.append("-x");
                 arguments.append(a);
@@ -534,6 +563,7 @@ List<Source> Source::parse(const String &cmdLine,
                     const int eq = def.indexOf('=');
                     if (eq == -1) {
                         define.define = def;
+                        define.flags |= Define::NoValue;
                     } else {
                         define.define = def.left(eq);
                         define.value = def.mid(eq + 1);
@@ -544,8 +574,6 @@ List<Source> Source::parse(const String &cmdLine,
                           define.value.constData());
                     defines.insert(define);
                 }
-            } else if (arg.startsWith("-I")) {
-                addIncludeArg(includePaths, Source::Include::Type_Include, 2, split, i, path);
 #ifdef OS_Darwin
             } else if (arg == "-arch") {
                 // Limit -arch to a single format i368/x86_64. Darwin allows
@@ -560,23 +588,7 @@ List<Source> Source::parse(const String &cmdLine,
                 } else {
                     warning() << "[Source::parse] Removing additional -arch argument(s) to allow indexing.";
                 }
-
-                // Framework includes
-            } else if (arg.startsWith("-F")) {
-                addIncludeArg(includePaths, Source::Include::Type_Framework, 2, split, i, path);
-            } else if (arg.startsWith("-iframework")) {
-                addIncludeArg(includePaths, Source::Include::Type_SystemFramework, 11, split, i, path);
 #endif
-            } else if (arg.startsWith("-include")) {
-                addIncludeArg(includePaths, Source::Include::Type_FileInclude, 8, split, i, path);
-            } else if (arg.startsWith("-include-pch")) {
-                addIncludeArg(includePaths, Source::Include::Type_FileInclude, 8, split, i, path);
-            } else if (arg.startsWith("-isystem")) {
-                addIncludeArg(includePaths, Source::Include::Type_System, 8, split, i, path);
-            } else if (arg.startsWith("-iquote")) {
-                addIncludeArg(includePaths, Source::Include::Type_Quote, 7, split, i, path);
-            } else if (arg.startsWith("-cxx-isystem")) {
-                addIncludeArg(includePaths, Source::Include::Type_System, 12, split, i, path);
             } else if (arg == "-ObjC++") {
                 language = ObjectiveCPlusPlus;
                 arguments.append(arg);
@@ -605,24 +617,22 @@ List<Source> Source::parse(const String &cmdLine,
                         language = CPlusPlus11;
                     }
                 }
-            } else if (arg.startsWith("-isysroot")) {
-                arguments.append(arg);
-                if (i + 1 < s) {
-                    sysRootIndex = arguments.size();
-                    Path root = split.value(++i);
-                    root.resolve();
-                    arguments.append(root);
+            } else if (arg.startsWith("-o")) {
+                Path p;
+                if (arg.size() > 2) {
+                    p = arg.mid(2);
+                } else if (i + 1 < s) {
+                    p = split.value(++i);
                 }
-            } else if (arg == "-o") {
-                if (i + 1 < s) {
+                if (!p.isEmpty()) {
                     bool ok;
-                    Path p = Path::resolved(split.value(++i), Path::RealPath, path, &ok);
+                    p = Path::resolved(p, Path::RealPath, path, &ok);
                     // error() << p << ok << split.value(i) << Path::resolved(split.value(i), Path::MakeAbsolute);
                     if (!ok && !p.isAbsolute()) {
                         p.prepend(path); // the object file might not exist
                         p.canonicalize();
                     }
-                    buildRoot = RTags::findProjectRoot(p, RTags::BuildRoot);
+                    buildRoot = RTags::findProjectRoot(p, RTags::BuildRoot, cache);
                     buildRoot.resolve(Path::RealPath, cwd);
                     if (buildRoot.isDir()) {
                         buildRootId = Location::insertFile(buildRoot);
@@ -630,7 +640,22 @@ List<Source> Source::parse(const String &cmdLine,
                         buildRoot.clear();
                     }
                 }
-            } else {
+                outputFilename = std::move(p);
+            }
+#define DECLARE_INCLUDE_TYPE(type, argument, space)                     \
+            else if (arg.startsWith(argument)) {                        \
+                const size_t argLen = strlen(argument);                 \
+                Path p;                                                 \
+                if (arg.size() == argLen) {                             \
+                    p = Path::resolved(split.value(++i), Path::MakeAbsolute, path); \
+                } else {                                                \
+                    p = Path::resolved(arg.mid(argLen), Path::MakeAbsolute, cwd); \
+                }                                                       \
+                includePaths.append(Source::Include(Source::Include::type, p)); \
+            }
+#include "IncludeTypesInternal.h"
+#undef DECLARE_INCLUDE_TYPE
+            else {
                 arguments.append(arg);
                 if (hasValue(arg)) {
                     arguments.append(Path::resolved(split.value(++i), Path::MakeAbsolute, path));
@@ -641,24 +666,24 @@ List<Source> Source::parse(const String &cmdLine,
             Path resolved;
             if (!compilerId) {
                 add = false;
-                const Path compiler = resolveCompiler(arg, cwd, pathEnvironment);
-                if (!access(compiler.nullTerminated(), R_OK | X_OK)) {
-                    validCompiler = isCompiler(compiler, environment);
-                    compilerId = Location::insertFile(compiler);
+                const std::pair<Path, bool> compiler = resolveCompiler(arg, cwd, environment, pathEnvironment, cache);
+                if (!compiler.first.isEmpty()) {
+                    validCompiler = compiler.second;
+                    compilerId = Location::insertFile(compiler.first);
                 } else {
                     break;
                 }
             } else {
                 const Path c = arg;
                 resolved = Path::resolved(arg, Path::RealPath, cwd);
-                if ((!resolved.extension() || !resolved.isHeader()) && !resolved.isSource()) {
+                if (arg != "-" && (!resolved.extension() || !resolved.isHeader()) && !resolved.isSource()) {
                     add = false;
                     if (i == 1) {
-                        const Path inPath = findFileInPath(c, cwd, pathEnvironment);
-                        if (!access(inPath.nullTerminated(), R_OK | X_OK)) {
-                            extraCompiler = inPath;
+                        const std::pair<Path, bool> inPath = resolveCompiler(c, cwd, environment, pathEnvironment, cache);
+                        if (!inPath.first.isEmpty()) {
+                            extraCompiler = inPath.first;
                             if (!validCompiler)
-                                validCompiler = isCompiler(extraCompiler, environment);
+                                validCompiler = inPath.second;
                         }
                     }
                 }
@@ -666,7 +691,7 @@ List<Source> Source::parse(const String &cmdLine,
             if (add) {
                 const Language lang = language != NoLanguage ? language : guessLanguageFromSourceFile(resolved);
                 if (lang != NoLanguage) {
-                    inputs.append({resolved, Path::resolved(arg, Path::MakeAbsolute, cwd), lang});
+                    inputs.append({resolved, Path::resolved(arg, Path::MakeAbsolute, cwd), arg, lang});
                 } else {
                     warning() << "Can't figure out language for" << arg;
                 }
@@ -676,28 +701,30 @@ List<Source> Source::parse(const String &cmdLine,
 
     if (!validCompiler) {
         warning() << "Source::parse Nothing looks like a compiler" << Location::path(compilerId) << extraCompiler;
-        return List<Source>();
+        return SourceList();
     }
 
     if (inputs.isEmpty()) {
         warning() << "Source::parse No file for" << cmdLine;
-        return List<Source>();
+        return SourceList();
     }
 
-    List<Source> ret;
+    SourceList ret;
     if (!inputs.isEmpty()) {
         if (!buildRootId) {
-            buildRoot = RTags::findProjectRoot(inputs.first().realPath, RTags::BuildRoot);
+            buildRoot = RTags::findProjectRoot(inputs.first().realPath, RTags::BuildRoot, cache);
             if (buildRoot.isDir())
                 buildRootId = Location::insertFile(buildRoot);
         }
-        includePathHash = ::hashIncludePaths(includePaths, buildRoot);
+        const Flags<Server::Option> serverFlags = Server::instance() ? Server::instance()->options().options : NullFlags;
+        includePathHash = ::hashIncludePaths(includePaths, buildRoot, serverFlags);
 
-        ret.resize(inputs.size());
-        int idx = 0;
+        ret.reserve(inputs.size());
         for (const auto input : inputs) {
             unresolvedInputLocations->append(input.absolute);
-            Source &source = ret[idx++];
+            if (input.unmolested == "-")
+                continue;
+            Source source;
             source.directory = path;
             source.fileId = Location::insertFile(input.realPath);
             source.extraCompiler = extraCompiler;
@@ -708,9 +735,10 @@ List<Source> Source::parse(const String &cmdLine,
             source.defines = defines;
             source.includePaths = includePaths;
             source.arguments = arguments;
-            source.sysRootIndex = sysRootIndex;
+            source.outputFilename = outputFilename;
             source.language = input.language;
             assert(source.language != NoLanguage);
+            ret.emplace_back(std::move(source));
         }
     }
     if (testLog(LogLevel::Warning))
@@ -752,7 +780,7 @@ static inline bool compareDefinesNoNDEBUG(const Set<Source::Define> &l, const Se
 
 static bool nextArg(List<String>::const_iterator &it,
                     const List<String>::const_iterator end,
-                    bool separateDebugAndRelease)
+                    Flags<Server::Option> flags)
 {
     while (it != end) {
         if (isBlacklisted(*it)) {
@@ -760,7 +788,9 @@ static bool nextArg(List<String>::const_iterator &it,
             ++it;
             if (val && it != end)
                 ++it;
-        } else if (!separateDebugAndRelease && (*it == "-g" || it->startsWith("-O"))) {
+        } else if (!(flags & Server::SeparateDebugAndRelease) && (*it == "-g" || it->startsWith("-O"))) {
+            ++it;
+        } else if (!(flags & Server::Separate32BitAnd64Bit) && (*it == "-m32" || *it == "-m64")) {
             ++it;
         } else {
             break;
@@ -774,16 +804,19 @@ bool Source::compareArguments(const Source &other) const
     assert(fileId == other.fileId);
 
     if  (includePathHash != other.includePathHash) {
+        warning() << "includepathhash is different";
         return false;
     }
 
     const Server *server = Server::instance();
-    const bool separateDebugAndRelease = server && server->options().options & Server::SeparateDebugAndRelease;
-    if (separateDebugAndRelease) {
+    const Flags<Server::Option> serverFlags = server ? server->options().options : NullFlags;
+    if (serverFlags & Server::SeparateDebugAndRelease) {
         if (defines != other.defines) {
+            warning() << "defines are different 1";
             return false;
         }
     } else if (!compareDefinesNoNDEBUG(defines, other.defines)) {
+        warning() << "defines are different 2";
         return false;
     }
 
@@ -793,44 +826,50 @@ bool Source::compareArguments(const Source &other) const
     const auto hisEnd = other.arguments.end();
 
     while (me != him) {
-        if (!nextArg(me, myEnd, separateDebugAndRelease))
+        if (!nextArg(me, myEnd, serverFlags))
             break;
-        if (!nextArg(him, hisEnd, separateDebugAndRelease))
+        if (!nextArg(him, hisEnd, serverFlags)) {
+            warning() << "Couldn't find arg for him" << *me;
             return false;
+        }
         if (*me != *him) {
+            warning() << "Args are different" << *me << *him;
             return false;
         }
         ++me;
         ++him;
     }
     if (him == hisEnd) {
+        warning() << "Args are the same";
         return true;
-    } else if (!nextArg(him, hisEnd, separateDebugAndRelease)) {
+    } else if (!nextArg(him, hisEnd, serverFlags)) {
+        warning() << "Args are the same";
         return true;
     }
+    warning() << "He has an arg that I don't have" << *him;
     return false;
 }
 
-List<String> Source::toCommandLine(Flags<CommandLineFlag> flags, bool *usedPch) const
+List<String> Source::toCommandLine(Flags<CommandLineFlag> f, bool *usedPch) const
 {
     if (usedPch)
         *usedPch = false;
     const Server *server = Server::instance();
     if (!server)
-        flags |= (ExcludeDefaultArguments|ExcludeDefaultDefines|ExcludeDefaultIncludePaths);
+        f |= (ExcludeDefaultArguments|ExcludeDefaultDefines|ExcludeDefaultIncludePaths);
 
     List<String> ret;
     ret.reserve(64);
-    if ((flags & IncludeCompiler) == IncludeCompiler) {
+    if ((f & IncludeCompiler) == IncludeCompiler) {
         ret.append(compiler());
     }
-    if (flags & IncludeExtraCompiler && !extraCompiler.isEmpty()) {
+    if (f & IncludeExtraCompiler && !extraCompiler.isEmpty()) {
         ret.append(extraCompiler);
     }
 
     Map<String, String> config;
     Set<String> remove;
-    if (flags & IncludeRTagsConfig) {
+    if (f & IncludeRTagsConfig) {
         config = RTags::rtagsConfig(sourceFile());
         remove = config.value("remove-arguments").split(";").toSet();
     }
@@ -839,7 +878,7 @@ List<String> Source::toCommandLine(Flags<CommandLineFlag> flags, bool *usedPch) 
         const String &arg = arguments.at(i);
         const bool hasValue = ::hasValue(arg);
         bool skip = false;
-        if (flags & FilterBlacklist && isBlacklisted(arg)) {
+        if (f & FilterBlacklist && isBlacklisted(arg)) {
             skip = true;
         }
         if (!skip && remove.contains(arg))
@@ -852,89 +891,61 @@ List<String> Source::toCommandLine(Flags<CommandLineFlag> flags, bool *usedPch) 
             ++i;
         }
     }
-    if (!(flags & ExcludeDefaultArguments)) {
+    if (!(f & ExcludeDefaultArguments)) {
         assert(server);
         for (const auto &arg : server->options().defaultArguments)
             ret.append(arg);
     }
 
-    if (flags & IncludeDefines) {
+    if (f & IncludeDefines) {
         for (const auto &def : defines)
-            ret += def.toString(flags);
-        if (!(flags & ExcludeDefaultIncludePaths)) {
+            ret += def.toString(f);
+        if (!(f & ExcludeDefaultIncludePaths)) {
             assert(server);
             for (const auto &def : server->options().defines)
-                ret += def.toString(flags);
+                ret += def.toString(f);
         }
     }
-    if (flags & IncludeIncludePaths) {
+    if (f & IncludeIncludePaths) {
         for (const auto &inc : includePaths) {
             switch (inc.type) {
-            case Source::Include::Type_None:
-                assert(0 && "Impossible impossibility");
-                break;
-            case Source::Include::Type_Include:
-                ret << ("-I" + inc.path);
-                break;
-            case Source::Include::Type_Quote:
-                ret << "-iquote" << inc.path;
-                break;
-            case Source::Include::Type_Framework:
-                ret << ("-F" + inc.path);
-                break;
-            case Source::Include::Type_System:
-                ret << "-isystem" << inc.path;
-                break;
-            case Source::Include::Type_SystemFramework:
-                ret << "-iframework" << inc.path;
-                break;
-            case Source::Include::Type_FileInclude:
-                if (inc.isPch()) {
-                    if (flags & PCHEnabled) {
-                        if (usedPch)
-                            *usedPch = true;
-                        ret << "-include-pch" << (inc.path + ".gch");
-                    }
-                } else {
-                    ret << "-include" << inc.path;
-                }
-                break;
-            }
-        }
-        if (!(flags & ExcludeDefaultIncludePaths)) {
-            assert(server);
-            for (const auto &inc : server->options().includePaths) {
-                switch (inc.type) {
-                case Source::Include::Type_None:
-                    assert(0 && "Impossible impossibility");
+            case Include::Type_None: assert(0 && "Impossible impossibility"); break;
+#define DECLARE_INCLUDE_TYPE(type, argument, space)                 \
+                case Source::Include::type:                         \
+                    if (inc.type == Include::Type_PCH) {            \
+                        if (f & PCHEnabled) {                       \
+                            if (usedPch)                            \
+                                *usedPch = true;                    \
+                            ret << argument << (inc.path + ".gch"); \
+                        }                                           \
+                    } else if (*space) {                            \
+                        ret << argument << inc.path;                \
+                    } else {                                        \
+                        ret << (argument + inc.path);               \
+                    }                                               \
                     break;
-                case Source::Include::Type_Include:
-                    ret << ("-I" + inc.path);
-                    break;
-                case Source::Include::Type_Quote:
-                    ret << "-iquote" << inc.path;
-                    break;
-                case Source::Include::Type_Framework:
-                    ret << ("-F" + inc.path);
-                    break;
-                case Source::Include::Type_System:
-                    ret << "-isystem" << inc.path;
-                    break;
-                case Source::Include::Type_SystemFramework:
-                    ret << "-iframework" << inc.path;
-                    break;
-                case Source::Include::Type_FileInclude:
-                    ret << "-include" << inc.path;
-                    break;
-                }
+#include "IncludeTypesInternal.h"
             }
         }
     }
-    if (flags & IncludeRTagsConfig) {
+    if (!(f & ExcludeDefaultIncludePaths)) {
+        assert(server);
+        for (const auto &inc : server->options().includePaths) {
+            switch (inc.type) {
+            case Include::Type_None: assert(0 && "Impossible impossibility"); break;
+#include "IncludeTypesInternal.h"
+#undef DECLARE_INCLUDE_TYPE
+            }
+        }
+    }
+    if (f & IncludeOutputFilename && !outputFilename.isEmpty()) {
+        ret << "-o" << outputFilename;
+    }
+    if (f & IncludeRTagsConfig) {
         ret << config.value("add-arguments").split(' ');
     }
 
-    if (flags & IncludeSourceFile)
+    if (f & IncludeSourceFile)
         ret.append(sourceFile());
 
     return ret;
@@ -959,19 +970,21 @@ void Source::encode(Serializer &s, EncodeMode mode) const
     if (mode == EncodeSandbox && !Sandbox::root().isEmpty()) {
         s << Sandbox::encoded(sourceFile()) << fileId << Sandbox::encoded(compiler()) << compilerId
           << Sandbox::encoded(extraCompiler) << Sandbox::encoded(buildRoot()) << buildRootId
-          << static_cast<uint8_t>(language) << parsed << flags << defines;
+          << compileCommands() << compileCommandsFileId
+          << static_cast<uint8_t>(language) << flags << defines;
 
         auto incPaths = includePaths;
         for (auto &inc : incPaths)
             Sandbox::encode(inc.path);
 
         s << incPaths << Sandbox::encoded(arguments)
-          << sysRootIndex << Sandbox::encoded(directory) << includePathHash;
+          << Sandbox::encoded(directory) << includePathHash;
     } else {
         s << sourceFile() << fileId << compiler() << compilerId
           << extraCompiler << buildRoot() << buildRootId
-          << static_cast<uint8_t>(language) << parsed << flags << defines
-          << includePaths << arguments << sysRootIndex << directory << includePathHash;
+          << compileCommands() << compileCommandsFileId
+          << static_cast<uint8_t>(language) << flags << defines
+          << includePaths << arguments << directory << includePathHash;
     }
 }
 
@@ -979,16 +992,17 @@ void Source::decode(Deserializer &s, EncodeMode mode)
 {
     clear();
     uint8_t lang;
-    Path source, compiler, buildRoot;
+    Path source, compiler, buildRoot, compileCommands;
     s >> source >> fileId >> compiler >> compilerId >> extraCompiler
-      >> buildRoot >> buildRootId >> lang >> parsed >> flags
-      >> defines >> includePaths >> arguments >> sysRootIndex
+      >> buildRoot >> buildRootId >> compileCommands >> compileCommandsFileId
+      >> lang >> flags >> defines >> includePaths >> arguments
       >> directory >> includePathHash;
     language = static_cast<Language>(lang);
 
     if (mode == EncodeSandbox && !Sandbox::root().isEmpty()) { // SBROOT
         Sandbox::decode(source);
         Sandbox::decode(buildRoot);
+        Sandbox::decode(compileCommands);
         Sandbox::decode(compiler);
         Sandbox::decode(extraCompiler);
         Sandbox::decode(directory);
@@ -1003,5 +1017,7 @@ void Source::decode(Deserializer &s, EncodeMode mode)
         Location::set(compiler, compilerId);
     if (buildRootId)
         Location::set(buildRoot, buildRootId);
+    if (compileCommandsFileId)
+        Location::set(compileCommands, compileCommandsFileId);
     language = static_cast<Source::Language>(language);
 }
