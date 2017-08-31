@@ -15,6 +15,7 @@
 
 #include "ProcThread.h"
 #include <rct/StopWatch.h>
+#include "RTags.h"
 #ifdef RTAGS_HAS_PROC
 #include <sys/types.h>
 #include <dirent.h>
@@ -71,16 +72,10 @@ void ProcThread::readProc()
     }
 #ifdef RTAGS_HAS_PROC
     DIR *dir = opendir("/proc/");
-    union {
-        char direntPathBuf[PATH_MAX + sizeof(dirent) + 1];
-        dirent dbuf;
-    };
-
     int found = 0;
     StopWatch sw;
-    dirent *p;
     List<ParseNode> nodes(1);
-    while (!readdir_r(dir, &dbuf, &p) && p) {
+    while (const dirent *p = readdir(dir)) {
 #if defined(_DIRENT_HAVE_D_TYPE) && defined(_BSD_SOURCE)
         if (p->d_type != DT_DIR)
             continue;
@@ -216,10 +211,11 @@ void ProcThread::readProc()
         // }
         ++found;
     }
+    SourceCache cache;
     for (size_t i=0; i<nodes.size() - 1; ++i) {
         const auto &node = nodes.at(i);
         List<Path> paths;
-        List<Source> sources = Source::parse(node.cmdLine, node.cwd, node.environ, &paths);
+        SourceList sources = Source::parse(node.cmdLine, node.cwd, node.environ, &paths, &cache);
         if (sources.size()) {
             error() << "GOT SOURCES" << node.cmdLine;
         }

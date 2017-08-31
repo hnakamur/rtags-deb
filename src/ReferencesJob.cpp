@@ -27,11 +27,11 @@ static inline Flags<QueryJob::JobFlag> jobFlags(Flags<QueryMessage::Flag> queryF
 ReferencesJob::ReferencesJob(Location loc, const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Project> &proj)
     : QueryJob(query, proj, ::jobFlags(query->flags()))
 {
-    locations.insert(loc);
+    mLocations.insert(loc);
 }
 
 ReferencesJob::ReferencesJob(const String &sym, const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Project> &proj)
-    : QueryJob(query, proj, ::jobFlags(query->flags())), symbolName(sym)
+    : QueryJob(query, proj, ::jobFlags(query->flags())), mSymbolName(sym)
 {
 }
 
@@ -43,28 +43,28 @@ int ReferencesJob::execute()
         return 1;
     Set<Symbol> refs;
     Map<Location, std::pair<bool, CXCursorKind> > references;
-    if (!symbolName.isEmpty()) {
+    if (!mSymbolName.isEmpty()) {
         const bool hasFilter = QueryJob::hasFilter();
         auto inserter = [this, hasFilter](Project::SymbolMatchType type, const String &string, const Set<Location> &locs) {
             if (type == Project::StartsWith) {
                 const size_t paren = string.indexOf('(');
-                if (paren == String::npos || paren != symbolName.size() || RTags::isFunctionVariable(string))
+                if (paren == String::npos || paren != mSymbolName.size() || RTags::isFunctionVariable(string))
                     return;
             }
 
             for (const auto &l : locs) {
                 if (!hasFilter || filter(l.path())) {
-                    locations.insert(l);
+                    mLocations.insert(l);
                 }
             }
         };
-        proj->findSymbols(symbolName, inserter, queryFlags());
+        proj->findSymbols(mSymbolName, inserter, queryFlags());
     }
     const bool declarationOnly = queryFlags() & QueryMessage::DeclarationOnly;
     const bool definitionOnly = queryFlags() & QueryMessage::DefinitionOnly;
     Location startLocation;
     bool first = true;
-    for (auto it = locations.begin(); it != locations.end(); ++it) {
+    for (auto it = mLocations.begin(); it != mLocations.end(); ++it) {
         const Location pos = *it;
         Symbol sym = proj->findSymbol(pos);
         if (sym.isNull())
@@ -87,7 +87,7 @@ int ReferencesJob::execute()
             sym.clear();
             const Set<String> usrs = proj->findTargetUsrs(loc);
             for (const String &usr : usrs) {
-                for (const Symbol &s : proj->findByUsr(usr, loc.fileId(), Project::ArgDependsOn, loc)) {
+                for (const Symbol &s : proj->findByUsr(usr, loc.fileId(), Project::All)) {
                     if (s.isClass()) {
                         sym = s;
                         if (s.isDefinition())
@@ -161,7 +161,8 @@ int ReferencesJob::execute()
         write(")", DontQuote);
     };
 
-    auto writeLoc = [this, writeCons, writeFlags, kf](Location loc) {
+    Value json;
+    auto writeLoc = [this, writeCons, writeFlags, kf, &json](Location loc) {
         if (queryFlags() & QueryMessage::Elisp) {
             if (!filterLocation(loc))
                 return;
@@ -189,6 +190,33 @@ int ReferencesJob::execute()
                     }
                 });
             write(")", DontQuote);
+        } else if (queryFlags() & QueryMessage::JSON) {
+            if (!filterLocation(loc))
+                return;
+            Value value;
+            locationToString(loc, [&value, this](LocationPiece piece, const String &string) {
+                    switch (piece) {
+                    case Piece_ContainingFunctionLocation:
+                        if (queryFlags() & QueryMessage::ContainingFunctionLocation)
+                            value["cfl"] = string;
+                        break;
+                    case Piece_ContainingFunctionName:
+                        if (queryFlags() & QueryMessage::ContainingFunction)
+                            value["cf"] = string;
+                        break;
+                    case Piece_Location:
+                        value["loc"] = string;
+                        break;
+                    case Piece_Context:
+                        if (!(queryFlags() & QueryMessage::NoContext))
+                            value["ctx"] = string;
+                        break;
+                    case Piece_SymbolName:
+                    case Piece_Kind:
+                        break;
+                    }
+                });
+            json.push_back(value);
         } else {
             write(loc, writeFlags);
         }
@@ -236,8 +264,11 @@ int ReferencesJob::execute()
             writeLoc(loc);
         }
     }
-    if (queryFlags() & QueryMessage::Elisp)
+    if (queryFlags() & QueryMessage::Elisp) {
         write(")", DontQuote);
+    } else if (queryFlags() & QueryMessage::JSON) {
+        write(json.toJSON(), DontQuote|Unfiltered);
+    }
 
     return references.isEmpty() ? 1 : 0;
 }

@@ -58,13 +58,17 @@ public:
     void dump(const std::shared_ptr<Connection> &conn);
     void abort(const std::shared_ptr<IndexerJob> &job);
     void clearHeaderError(uint32_t file);
+    bool hasHeaderError(uint32_t fileId) const { return mHeaderErrors.contains(fileId); }
     Set<uint32_t> headerErrors() const { return mHeaderErrors; }
-    bool increasePriority(uint32_t fileId);
     void startJobs();
+    size_t pendingJobCount() const { return mPendingJobs.size(); }
+    size_t activeJobCount() const { return mActiveById.size(); }
+    void sort();
 private:
     enum { HighPriority = 5 };
     void jobFinished(const std::shared_ptr<IndexerJob> &job, const std::shared_ptr<IndexDataMessage> &message);
     struct Node {
+        unsigned long long started;
         std::shared_ptr<IndexerJob> job;
         Process *process;
         std::shared_ptr<Node> next, prev;
@@ -75,7 +79,6 @@ private:
 
     int mProcrastination;
     Set<uint32_t> mHeaderErrors;
-    Set<uint64_t> mHeaderErrorJobIds;
     EmbeddedLinkedList<std::shared_ptr<Node> > mPendingJobs;
     Hash<Process *, std::shared_ptr<Node> > mActiveByProcess;
     Hash<uint64_t, std::shared_ptr<Node> > mActiveById, mInactiveById;

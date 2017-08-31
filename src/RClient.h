@@ -22,6 +22,7 @@
 #include "rct/Path.h"
 #include "rct/Set.h"
 #include "rct/String.h"
+#include "CommandLineParser.h"
 #include "rct/rct-config.h"
 
 class RCCommand;
@@ -33,10 +34,10 @@ public:
     enum OptionType {
         None = 0,
         AbsolutePath,
-        AllReferences,
+        AddBuffers,
         AllDependencies,
+        AllReferences,
         AllTargets,
-        Autotest,
         BuildIndex,
         CheckIncludes,
         CheckReindex,
@@ -46,8 +47,10 @@ public:
         CodeCompleteIncludeMacros,
         CodeCompleteIncludes,
         CodeCompleteNoWait,
+        CodeCompletePrefix,
         CodeCompletionEnabled,
         CompilationFlagsOnly,
+        CompilationFlagsPwd,
         CompilationFlagsSplitLine,
         Compile,
         ConnectTimeout,
@@ -66,7 +69,7 @@ public:
         DiagnoseAll,
         Diagnostics,
         DisplayName,
-        DumpCompilationDatabase,
+        DumpCompileCommands,
         DumpCompletions,
         DumpFile,
         DumpFileMaps,
@@ -88,13 +91,13 @@ public:
         IncludeFile,
         IsIndexed,
         IsIndexing,
-        JobCount,
         JSON,
+        JobCount,
         KindFilter,
         ListBuffers,
         ListCursorKinds,
         ListSymbols,
-        LoadCompilationDatabase,
+        LoadCompileCommands,
         LogFile,
         Man,
         MatchCaseInsensitive,
@@ -102,8 +105,10 @@ public:
         Max,
         NoColor,
         NoContext,
+        NoRealPath,
         NoSortReferencesByInput,
         NoSpellCheckinging,
+        Noop,
         PathFilter,
         PreprocessFile,
         Project,
@@ -116,6 +121,7 @@ public:
         ReferenceName,
         Reindex,
         ReloadFileManager,
+        RemoveBuffers,
         RemoveFile,
         Rename,
         ReverseSort,
@@ -130,39 +136,34 @@ public:
         StripParen,
         Suspend,
         SymbolInfo,
+        SymbolInfoIncludeBaseClasses,
         SymbolInfoIncludeParents,
         SymbolInfoIncludeReferences,
         SymbolInfoIncludeTargets,
-        SymbolInfoIncludeBaseClasses,
         SynchronousCompletions,
         SynchronousDiagnostics,
+        TargetUsrs,
         Timeout,
         Tokens,
         TokensIncludeSymbols,
         UnsavedFile,
+        Validate,
         Verbose,
+        VerifyVersion,
         Version,
-#ifdef RTAGS_HAS_LUA
         VisitAST,
         VisitASTScript,
-#endif
         Wait,
         WildcardSymbolNames,
         XML,
         NumOptions
     };
 
-    enum Flag {
-        Flag_None = 0x0,
-        Flag_Autotest = 0x1
-    };
-
     RClient();
     ~RClient();
-    int exec();
-    CommandLineParser::ParseStatus parse(int &argc, char **argv);
-
-    Flags<Flag> flags() const { return mFlags; }
+    void exec();
+    int exitCode() const { return mExitCode; }
+    CommandLineParser::ParseStatus parse(size_t argc, char **argv);
 
     int max() const { return mMax; }
     LogLevel logLevel() const { return mLogLevel; }
@@ -187,23 +188,22 @@ public:
     Flags<QueryMessage::Flag> queryFlags() const { return mQueryFlags; }
     int terminalWidth() const { return mTerminalWidth; }
 
-    int argc() const { return mArgc; }
-    char **argv() const { return mArgv; }
+    String commandLine() const { return mCommandLine; }
     void onNewMessage(const std::shared_ptr<Message> &message, const std::shared_ptr<Connection> &);
     List<String> environment() const;
+    String codeCompletePrefix() const { return mCodeCompletePrefix; }
 #ifdef RTAGS_HAS_LUA
     List<String> visitASTScripts() const { return mVisitASTScripts; }
 #endif
 private:
-    void addQuery(QueryMessage::Type t, const String &query = String(),
+    void addQuery(QueryMessage::Type t, String &&query = String(),
                   Flags<QueryMessage::Flag> extraQueryFlags = Flags<QueryMessage::Flag>());
     void addQuitCommand(int exitCode);
 
     void addLog(LogLevel level);
-    void addCompile(const Path &cwd, const String &args);
-    void addCompile(const Path &dir);
+    void addCompile(String &&args, const Path &cwd);
+    void addCompile(Path &&compileCommands);
 
-    Flags<Flag> mFlags;
     Flags<QueryMessage::Flag> mQueryFlags;
     int mMax, mTimeout, mMinOffset, mMaxOffset, mConnectTimeout, mBuildIndex;
     LogLevel mLogLevel;
@@ -215,21 +215,19 @@ private:
     Path mSocketFile;
     Path mCurrentFile;
     String mTcpHost;
+    String mCodeCompletePrefix;
     uint16_t mTcpPort;
     bool mGuessFlags;
     Path mProjectRoot;
     int mTerminalWidth;
+    int mExitCode;
 #ifdef RTAGS_HAS_LUA
     List<String> mVisitASTScripts;
 #endif
     mutable List<String> mEnvironment;
 
-    int mArgc;
-    char **mArgv;
-
+    String mCommandLine;
     friend class CompileCommand;
 };
-
-RCT_FLAGS(RClient::Flag);
 
 #endif
