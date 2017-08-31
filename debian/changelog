@@ -1,3 +1,13 @@
+rtags (2.14-1hnakamur1) xenial; urgency=medium
+
+  * Imported Upstream version 2.14
+  * Update llvm and libclang version to 4.0
+  * Update gcc version to 5
+  * Add zlib1g-dev, libssl-dev, pkg-config to Build-Depends
+  * Pass cmake options to dh_auto_configure
+
+ -- Hiroaki Nakamura <hnakamur@gmail.com>  Fri, 01 Sep 2017 00:29:42 +0900
+
 rtags (2.3-1hnakamur1) xenial; urgency=medium
 
   * Rebuild for xenial

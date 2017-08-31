@@ -1,10 +1,28 @@
 rtags for Debian
 ----------------
 
-<this file describes information about the source package, see Debian policy
-manual section 4.14. You WILL either need to modify or delete this file>
+Files in src/rct, src/selene, and src/lua are copied from git submodules.
 
+        $ cat .gitmodules
+        [submodule "src/rct"]
+                path = src/rct
+                url = https://github.com/Andersbakken/rct
+                branch = master
+        [submodule "src/selene"]
+                path = src/selene
+                url = https://github.com/jeremyong/Selene.git
+            branch = master
+        [submodule "src/lua"]
+                path = src/lua
+                url = https://github.com/LuaDist/lua.git
+            branch = master
 
+Commit hashes are:
 
- -- Hasan Yavuz ÖZDERYA <hy@ozderya.net>  Wed, 14 Sep 2016 00:18:46 +0300
+	$ git submodule status
+        fcdc5efb13f0d6c03d2868b7476b73e63a291ed3 src/lua (5.3.2)
+        da6e8c1da3271024ecdde5acafdd589841e0ad17 src/rct (ignore-18-gda6e8c1)
+        1b6b3ff9ecea0e5ef0df1dfbdb03028d2264ff20 src/selene (0.1-187-g1b6b3ff)
+
+ -- Hiroaki Nakamura <hnakamur@gmail.com>  Fri, 01 Sep 2017 00:25:00 +0900
 

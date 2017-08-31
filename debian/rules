@@ -10,6 +10,4 @@
 override_dh_auto_configure:
 	dh_auto_configure -- -DCMAKE_C_COMPILER=/usr/bin/gcc-5  \
 		-DCMAKE_CXX_COMPILER=/usr/bin/g++-5 \
-		-DLIBCLANG_LIBRARIES=/usr/lib/llvm-4.0/lib/libclang.so \
-		.
-
+		-DLIBCLANG_LIBRARIES=/usr/lib/llvm-4.0/lib/libclang.so
