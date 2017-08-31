@@ -8,7 +8,13 @@
 	dh $@ --buildsystem=cmake
 
 override_dh_auto_configure:
-	dh_auto_configure -- -DCMAKE_C_COMPILER=/usr/bin/gcc-5  \
+	cmake --prefix=/usr --includedir=\${prefix}/include \
+		--mandir=\${prefix}/share/man \
+		--infodir=\${prefix}/share/info \
+		--sysconfdir=/etc --localstatedir=/var \
+		--disable-silent-rules --libdir=\${prefix}/lib/x86_64-linux-gnu \
+		--libexecdir=\${prefix}/lib/x86_64-linux-gnu --disable-maintainer-mode \
+		-DCMAKE_C_COMPILER=/usr/bin/gcc-5  \
 		-DCMAKE_CXX_COMPILER=/usr/bin/g++-5 \
 		-DLIBCLANG_LIBRARIES=/usr/lib/llvm-4.0/lib/libclang.so \
 		.
