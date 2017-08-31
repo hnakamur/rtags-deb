@@ -3,7 +3,8 @@ Section: devel
 Priority: optional
 Maintainer: Hiroaki Nakamura <hnakamur@gmail.com>
 Build-Depends: debhelper (>= 8.0.0), llvm-4.0-dev (>= 3.5), libclang-4.0-dev (>= 3.5),
-               cmake (>= 2.8), gcc-5 (>= 4.7)
+               cmake (>= 2.8), gcc-5 (>= 4.7),
+               zlib1g-dev, libssl-dev, pkg-config
 Standards-Version: 3.9.4
 Homepage: https://github.com/Andersbakken/rtags
 #Vcs-Git: git://git.debian.org/collab-maint/rtags.git
