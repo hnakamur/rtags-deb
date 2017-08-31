@@ -44,11 +44,11 @@ QueryJob::QueryJob(const std::shared_ptr<QueryMessage> &query,
                 if (filter.mode == QueryMessage::PathFilter::Dependency) {
                     uint32_t f = Location::fileId(filter.pattern);
                     if (f && mProject)
-                        mFilters.append(std::shared_ptr<Filter>(new DependencyFilter(f, mProject)));
+                        mFilters.append(std::make_shared<DependencyFilter>(f, mProject));
                 } else if (query->flags() & QueryMessage::MatchRegex) {
-                    mFilters.append(std::shared_ptr<Filter>(new RegexFilter(filter.pattern)));
+                    mFilters.append(std::make_shared<RegexFilter>(filter.pattern));
                 } else {
-                    mFilters.append(std::shared_ptr<Filter>(new PathFilter(filter.pattern)));
+                    mFilters.append(std::make_shared<PathFilter>(filter.pattern));
                 }
             }
         }
@@ -218,7 +218,10 @@ bool QueryJob::write(const Symbol &symbol, Flags<WriteFlag> writeFlags)
         toStringFlags |= Symbol::IncludeParents;
     if (queryFlags() & QueryMessage::SymbolInfoIncludeBaseClasses)
         toStringFlags |= Symbol::IncludeBaseClasses;
-
+    if (queryFlags() & (QueryMessage::ContainingFunction|QueryMessage::JSON|QueryMessage::Elisp))
+        toStringFlags |= Symbol::IncludeContainingFunction;
+    if (queryFlags() & (QueryMessage::ContainingFunctionLocation|QueryMessage::JSON|QueryMessage::Elisp))
+        toStringFlags |= Symbol::IncludeContainingFunctionLocation;
 
     if (symbol.isNull())
         return false;
@@ -230,12 +233,15 @@ bool QueryJob::write(const Symbol &symbol, Flags<WriteFlag> writeFlags)
         return false;
 
     String out;
-    if (queryFlags() & QueryMessage::Elisp) {
-        out = RTags::toElisp(symbol.toValue(project(), toStringFlags, Location::NoColor|Location::AbsolutePath));
-    } else if (queryFlags() & QueryMessage::JSON) {
-        out = symbol.toValue(project(), toStringFlags, Location::NoColor|Location::AbsolutePath).toJSON();
+    if (queryFlags() & (QueryMessage::Elisp|QueryMessage::JSON)) {
+        Value val = symbol.toValue(project(), toStringFlags, locationToStringFlags() | Location::NoColor, mPieceFilters);
+        if (queryFlags() & QueryMessage::Elisp) {
+            out = RTags::toElisp(val);
+        } else {
+            out = val.toJSON();
+        }
     } else {
-        out = symbol.toString(toStringFlags, locationToStringFlags(), project());
+        out = symbol.toString(project(), toStringFlags, locationToStringFlags(), mPieceFilters);
     }
     return write(out, writeFlags|Unfiltered);
 }

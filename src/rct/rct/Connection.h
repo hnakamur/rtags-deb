@@ -7,6 +7,7 @@
 #include <rct/SignalSlot.h>
 #include <rct/SocketClient.h>
 #include <rct/String.h>
+#include <functional>
 
 class ConnectionPrivate;
 class Event;
@@ -30,10 +31,15 @@ public:
     void setVersion(int version) { mVersion = version; }
     int version() const { return mVersion; }
 
+    void setErrorHandler(std::function<void(const SocketClient::SharedPtr &, Message::MessageError &&)> handler) { mErrorHandler = handler; }
+    std::function<void(const SocketClient::SharedPtr &, Message::MessageError &&)> errorHandler() const { return mErrorHandler; }
+
     void setSilent(bool on) { mSilent = on; }
     bool isSilent() const { return mSilent; }
 
+#ifndef _WIN32
     bool connectUnix(const Path &socketFile, int timeout = 0);
+#endif
     bool connectTcp(const String &host, uint16_t port, int timeout = 0);
 
     int pendingWrite() const;
@@ -62,7 +68,7 @@ public:
 
     void close() { assert(mSocketClient); mSocketClient->close(); }
 
-    bool isConnected() const { return mSocketClient->isConnected(); }
+    bool isConnected() const { return mSocketClient && mSocketClient->isConnected(); }
 
     Signal<std::function<void(std::shared_ptr<Connection>)> > &sendFinished() { return mSendFinished; }
     Signal<std::function<void(std::shared_ptr<Connection>)> > &connected() { return mConnected; }
@@ -94,6 +100,8 @@ private:
     int mPendingRead, mPendingWrite, mTimeoutTimer, mCheckTimer, mFinishStatus, mVersion;
 
     bool mSilent, mIsConnected, mWarned;
+
+    std::function<void(const SocketClient::SharedPtr &, Message::MessageError &&)> mErrorHandler;
 
     Signal<std::function<void(std::shared_ptr<Message>, std::shared_ptr<Connection>)> > mNewMessage;
     Signal<std::function<void(std::shared_ptr<Connection>)> > mConnected, mDisconnected, mError, mSendFinished;

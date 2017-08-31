@@ -50,31 +50,61 @@ int FollowLocationJob::execute()
         }
     }
 
-    if (queryFlags() & QueryMessage::AllTargets) {
+    if (queryFlags() & QueryMessage::TargetUsrs) {
         const Set<String> usrs = project()->findTargetUsrs(location);
         for (const String &usr : usrs) {
-            for (const Symbol &s : project()->findByUsr(usr, location.fileId(), Project::ArgDependsOn, location)) {
+            for (const Symbol &s : project()->findByUsr(usr, location.fileId(), Project::All)) {
                 write(s.toString());
             }
         }
-    }
-
-    const auto target = project()->findTarget(symbol);
-    if (target.location.isNull())
-        return 1;
-
-    if (symbol.usr == target.usr) {
-        write(target.location);
         return 0;
     }
 
-    if (queryFlags() & QueryMessage::DeclarationOnly ? target.isDefinition() : !target.isDefinition()) {
-        const auto other = project()->findTarget(target);
-        if (!other.isNull() && other.usr == target.usr) {
-            write(other.location);
-            return 0;
+    auto targets = RTags::sortTargets(project()->findTargets(symbol));
+
+    int rank = -1;
+    Set<Location> seen;
+    auto writeTarget = [&rank, this, &seen](const Symbol &target) {
+        if (seen.insert(target.location)) {
+            write(target.location);
+            rank = RTags::targetRank(target.kind);
         }
+    };
+    for (const auto &target : targets) {
+        if (target.location.isNull())
+            continue;
+
+        if (symbol.usr == target.usr) {
+            writeTarget(target);
+            if (queryFlags() & QueryMessage::AllTargets)
+                continue;
+            break;
+        }
+
+        if (queryFlags() & QueryMessage::DeclarationOnly ? target.isDefinition() : !target.isDefinition()) {
+            const auto others = RTags::sortTargets(project()->findTargets(target));
+            bool found = false;
+            for (auto other : others) {
+                if (!other.isNull() && other.usr == target.usr) {
+                    found = true;
+                    writeTarget(other);
+                    if (!(queryFlags() & QueryMessage::AllTargets)) {
+                        break;
+                    }
+                }
+            }
+
+            if (found) {
+                if (queryFlags() & QueryMessage::AllTargets) {
+                    continue;
+                } else {
+                    break;
+                }
+            }
+        }
+        writeTarget(target);
+        if (!(queryFlags() & QueryMessage::AllTargets))
+            break;
     }
-    write(target.location);
     return 0;
 }

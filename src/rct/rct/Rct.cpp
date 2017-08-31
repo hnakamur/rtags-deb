@@ -1,11 +1,10 @@
 #include "Rct.h"
 
-#include <arpa/inet.h>
+
 #include <dirent.h>
 #include <limits.h>
-#include <netdb.h>
+
 #include <sys/fcntl.h>
-#include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -14,6 +13,25 @@
 #elif OS_FreeBSD
 # include <netinet/in.h>
 # include <sys/sysctl.h>
+#endif
+#ifdef _WIN32
+#  ifdef _WIN32_WINNT
+#    if _WIN32_WINNT < _WIN32_WINNT_VISTA
+#      warning "need to compile at least for windows vista"
+#    endif
+#  else
+#    define _WIN32_WINNT _WIN32_WINNT_VISTA
+#    define NTDDI_VERSION NTDDI_VISTA
+#  endif
+#  include <Winsock2.h>
+#  include <Ws2tcpip.h>
+#  ifndef HOST_NAME_MAX
+#    define HOST_NAME_MAX 256 //according to gethostname documentation on MSDN
+#  endif
+#else
+#  include <arpa/inet.h>
+#  include <netdb.h>
+#  include <sys/socket.h>
 #endif
 
 #include "rct/rct-config.h"
@@ -192,7 +210,8 @@ void findExecutablePath(const char *argv0)
         }
     }
     const char *path = getenv("PATH");
-    const List<String> paths = String(path).split(':');
+
+    const List<String> paths = String(path).split(Path::ENV_PATH_SEPARATOR);
     for (size_t i=0; i<paths.size(); ++i) {
         const Path p = (paths.at(i) + "/") + argv0;
         if (p.isFile()) {
@@ -211,10 +230,10 @@ void findExecutablePath(const char *argv0)
     }
 #elif defined(OS_Darwin)
     {
-        char path[PATH_MAX];
-        uint32_t size = sizeof(path);
-        if (_NSGetExecutablePath(path, &size) == 0) {
-            sExecutablePath = Path(path, size).followLink();
+        char buf[PATH_MAX];
+        uint32_t size = sizeof(buf);
+        if (_NSGetExecutablePath(buf, &size) == 0) {
+            sExecutablePath = Path(buf, size).followLink();
             if (sExecutablePath.isFile())
                 return;
         }
@@ -222,14 +241,16 @@ void findExecutablePath(const char *argv0)
 #elif defined(OS_FreeBSD)
     {
         int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
-        char path[PATH_MAX];
-        size_t size = sizeof(path);
-        if (!sysctl(mib, 4, path, &size, 0, 0)) {
-            sExecutablePath = Path(path, size).followLink();
+        char buf[PATH_MAX];
+        size_t size = sizeof(buf);
+        if (!sysctl(mib, 4, buf, &size, 0, 0)) {
+            sExecutablePath = Path(buf, size).followLink();
             if (sExecutablePath.isFile())
                 return;
         }
     }
+#elif defined _WIN32
+    //nothing here so far.
 #else
 #warning Unknown platform.
 #endif
@@ -538,7 +559,11 @@ String strerror(int error)
 #endif
     char buf[1024];
     buf[0] = '\0';
+#ifdef _WIN32
+    auto foo = strerror_s(buf, sizeof(buf), error);
+#else
     auto foo = strerror_r(error, buf, sizeof(buf));
+#endif
     (void)foo;
     String ret = buf;
     ret << " (" << error << ')';

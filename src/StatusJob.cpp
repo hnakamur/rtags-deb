@@ -75,21 +75,27 @@ int StatusJob::execute()
         out << "Running a debug build\n";
 #endif
         const Server::Options &opt = Server::instance()->options();
-        out << "socketFile" << opt.socketFile << '\n'
-            << "dataDir" << opt.dataDir << '\n'
-            << "options" << opt.options
-            << "jobCount" << opt.jobCount << '\n'
-            << "rpVisitFileTimeout" << opt.rpVisitFileTimeout << '\n'
-            << "rpIndexDataMessageTimeout" << opt.rpIndexDataMessageTimeout << '\n'
-            << "rpConnectTimeout" << opt.rpConnectTimeout << '\n'
-            << "rpConnectTimeout" << opt.rpConnectTimeout << '\n'
-            << "defaultArguments" << opt.defaultArguments << '\n'
-            << "includePaths" << opt.includePaths << '\n'
-            << "defines" << opt.defines << '\n'
-            << "ignoredCompilers" << opt.ignoredCompilers;
+        out << "socketFile: " << opt.socketFile << '\n'
+            << "dataDir: " << opt.dataDir << '\n'
+            << "options: " << opt.options
+            << "jobCount: " << opt.jobCount << '\n'
+            << "rpVisitFileTimeout: " << opt.rpVisitFileTimeout << '\n'
+            << "rpIndexDataMessageTimeout: " << opt.rpIndexDataMessageTimeout << '\n'
+            << "rpConnectTimeout: " << opt.rpConnectTimeout << '\n'
+            << "rpConnectTimeout: " << opt.rpConnectTimeout << '\n'
+            << "defaultArguments: " << opt.defaultArguments << '\n'
+            << "includePaths: " << opt.includePaths << '\n'
+            << "defines: " << opt.defines << '\n'
+            << "ignoredCompilers: " << opt.ignoredCompilers;
         write(out);
     }
 
+    if (query.isEmpty() || match("jobs")) {
+        matched = true;
+        if (!write(delimiter) || !write("jobs") || !write(delimiter))
+            return 1;
+        Server::instance()->dumpJobs(connection());
+    }
 
     std::shared_ptr<Project> proj = project();
     if (!proj) {
@@ -111,8 +117,8 @@ int StatusJob::execute()
                 ret << "source";
             if (mode & Project::Watch_Dependency)
                 ret << "dependency";
-            if (mode & Project::Watch_CompilationDatabase)
-                ret << "compilationdatabase";
+            if (mode & Project::Watch_CompileCommands)
+                ret << "compilecommands";
             return String::join(ret, '|');
         };
         for (const auto &it : watched) {
@@ -207,20 +213,9 @@ int StatusJob::execute()
 
     if (query.isEmpty() || match("sources")) {
         matched = true;
-        const Sources &map = proj->sources();
         if (!write(delimiter) || !write("sources") || !write(delimiter))
             return 1;
-        for (Sources::const_iterator it = map.begin(); it != map.end(); ++it) {
-            if (!write<512>("  %s: %s", it->second.sourceFile().constData(), it->second.toString().constData()))
-                return 1;
-        }
-    }
-
-    if (query.isEmpty() || match("jobs")) {
-        matched = true;
-        if (!write(delimiter) || !write("jobs") || !write(delimiter))
-            return 1;
-        Server::instance()->dumpJobs(connection());
+        proj->indexParseData().write([this](const String &str) { return write(str); });
     }
 
     if (query.isEmpty() || match("compilers")) {
@@ -240,7 +235,7 @@ int StatusJob::execute()
             write("  Includepaths:");
             for (const auto &it : source.includePaths)
                 write<512>("    %s", it.toString().constData());
-            write("");
+            write(String());
         }
     }
 
@@ -256,22 +251,21 @@ int StatusJob::execute()
             return 1;
         write(String::format<1024>("Path: %s", proj->path().constData()));
         bool first = true;
-        for (const auto &info : proj->compilationDataBaseInfos()) {
+        for (const auto &info : proj->indexParseData().compileCommands) {
             if (first) {
                 first = false;
-                write("\nCompilation Commands Database(s):");
+                write("\nCompile commands:");
             }
-            write(String::format<1024>("    File: %scompile_commands.json\n"
+            write(String::format<1024>("    File: %s\n"
                                        "    Last-Modified: %s (%llu)\n"
-                                       "    Path-Environement: %s\n"
                                        "    Bytes written: %zu\n"
-                                       "    Index-Flags: %s",
-                                       info.first.constData(),
-                                       String::formatTime(info.second.lastModified / 1000).constData(),
-                                       static_cast<unsigned long long>(info.second.lastModified),
-                                       String::join(info.second.environment, ':').constData(),
+                                       "    Environment: %s\n",
+                                       Location::path(info.first).constData(),
+                                       String::formatTime(info.second.lastModifiedMs / 1000).constData(),
+                                       static_cast<unsigned long long>(info.second.lastModifiedMs),
                                        proj->bytesWritten(),
-                                       info.second.indexFlags.toString().constData()));
+                                       String::join(info.second.environment, '\n').constData()));
+
         }
         matched = true;
     }

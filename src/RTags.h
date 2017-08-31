@@ -16,14 +16,25 @@
 #ifndef RTags_h
 #define RTags_h
 
+#if defined(__clang__)
+#if (__clang_major__ * 10000 + __clang_minor__ * 100 + __clang_patchlevel__) >= 30400
+#define HAS_JSON_H
+#endif
+#elif defined(__GNUC__)
+#if (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__) >= 40900
+#define HAS_JSON_H
+#endif
+#else // other compiler, assume json.h is supported
+#define HAS_JSON_H
+#endif
+
 #include <assert.h>
 #include <ctype.h>
-#include <getopt.h>
 #include <typeinfo>
 #include <utility>
 #include <unistd.h>
+#include <initializer_list>
 
-#include <clang/Basic/Version.h>
 #include <clang-c/Index.h>
 
 #include "rct/rct-config.h"
@@ -44,13 +55,51 @@ class Database;
 class Project;
 struct Diagnostic;
 struct DependencyNode;
-struct CompilationDataBaseInfo;
 typedef List<std::pair<uint32_t, uint32_t> > Includes;
 typedef Hash<uint32_t, DependencyNode*> Dependencies;
-typedef Map<uint64_t, Source> Sources;
+typedef Hash<uint32_t, SourceList> Sources;
 typedef Map<Path, Set<String> > Files;
 typedef Hash<uint32_t, Set<FixIt> > FixIts;
 typedef Hash<Path, String> UnsavedFiles;
+
+struct SourceCache;
+inline bool operator==(const CXCursor &l, CXCursorKind r)
+{
+    return clang_getCursorKind(l) == r;
+}
+inline bool operator==(CXCursorKind l, const CXCursor &r)
+{
+    return l == clang_getCursorKind(r);
+}
+
+inline bool operator!=(const CXCursor &l, CXCursorKind r)
+{
+    return clang_getCursorKind(l) != r;
+}
+inline bool operator!=(CXCursorKind l, const CXCursor &r)
+{
+    return l != clang_getCursorKind(r);
+}
+
+inline bool operator==(const CXCursor &l, const CXCursor &r)
+{
+    return clang_equalCursors(l, r);
+}
+inline bool operator!=(const CXCursor &l, const CXCursor &r)
+{
+    return !clang_equalCursors(l, r);
+}
+
+inline bool operator!(const CXCursor &cursor)
+{
+    return clang_Cursor_isNull(cursor);
+}
+
+inline bool operator!(const CXSourceLocation &location)
+{
+    static const CXSourceLocation sNullLocation = clang_getNullLocation();
+    return clang_equalLocations(location, sNullLocation);
+}
 
 namespace RTags {
 
@@ -59,6 +108,18 @@ String versionString();
 const LogLevel DiagnosticsLevel(-2);
 const LogLevel Statistics(-3);
 
+enum ExitCode {
+    Success = 0,
+    GeneralFailure = 32,
+    NetworkFailure = 33,
+    TimeoutFailure = 34,
+    NotIndexed = 35,
+    ConnectionFailure = 36,
+    ProtocolFailure = 37,
+    ArgumentParseError = 38,
+    UnexpectedMessageError = 39,
+    UnknownMessageError = 40
+};
 enum UnitType {
     CompileC,
     CompileCPlusPlus
@@ -98,9 +159,9 @@ struct TranslationUnit {
         if (index)
             clang_disposeIndex(index);
     }
-    static void visit(CXCursor cursor, std::function<CXChildVisitResult(CXCursor)> func)
+    static void visit(CXCursor c, std::function<CXChildVisitResult(CXCursor)> func)
     {
-        clang_visitChildren(cursor, [](CXCursor cursor, CXCursor, CXClientData data) {
+        clang_visitChildren(c, [](CXCursor cursor, CXCursor, CXClientData data) {
                 return (*reinterpret_cast<std::function<CXChildVisitResult(CXCursor)> *>(data))(cursor);
             }, &func);
     }
@@ -128,7 +189,7 @@ struct Auto {
     CXCursor cursor;
     CXType type;
 };
-std::shared_ptr<Auto> resolveAuto(const CXCursor &cursor);
+bool resolveAuto(const CXCursor &cursor, Auto *a = 0);
 
 struct Filter
 {
@@ -570,15 +631,15 @@ enum ProjectRootMode {
     SourceRoot,
     BuildRoot
 };
-Path findProjectRoot(const Path &path, ProjectRootMode mode);
+Path findProjectRoot(const Path &path, ProjectRootMode mode, SourceCache *cache = 0);
 enum FindAncestorFlag {
     Shallow = 0x1,
-    Wildcard = 0x2
+    Wildcard = 0x2,
+    Authoritative = 0x4
 };
 RCT_FLAGS(FindAncestorFlag);
-Path findAncestor(Path path, const char *fn, Flags<FindAncestorFlag> flags);
-Map<String, String> rtagsConfig(const Path &path);
-bool loadCompileCommands(const Hash<Path, CompilationDataBaseInfo> &infos, const Path &projectRoot);
+Path findAncestor(Path path, const String &fn, Flags<FindAncestorFlag> flags, SourceCache *cache = 0);
+Map<String, String> rtagsConfig(const Path &path, SourceCache *cache = 0);
 
 enum { DefinitionBit = 0x1000 };
 inline CXCursorKind targetsValueKind(uint16_t val)
@@ -601,21 +662,23 @@ inline int targetRank(CXCursorKind kind)
 {
     switch (kind) {
     case CXCursor_Constructor: // this one should be more than class/struct decl
-        return 1;
+        return 3;
     case CXCursor_ClassDecl:
     case CXCursor_StructDecl:
     case CXCursor_ClassTemplate:
         return 0;
     case CXCursor_FieldDecl:
     case CXCursor_VarDecl:
+    case CXCursor_ParmDecl:
+        return 6;
     case CXCursor_FunctionDecl:
     case CXCursor_CXXMethod:
         // functiondecl and cxx method must be more than cxx
-        // CXCursor_FunctionTemplate. Since constructors for templatatized
+        // CXCursor_FunctionTemplate. Since constructors for templatized
         // objects seem to come out as function templates
-        return 3;
-    case CXCursor_MacroDefinition:
         return 4;
+    case CXCursor_MacroDefinition:
+        return 5;
     default:
         return 2;
     }
@@ -633,6 +696,37 @@ inline Symbol bestTarget(const Set<Symbol> &targets)
     }
     return ret;
 }
+
+inline void sortTargets(List<Symbol> &targets)
+{
+    targets.sort([](const Symbol &l, const Symbol &r) {
+            const int lrank = RTags::targetRank(l.kind);
+            const int rrank = RTags::targetRank(r.kind);
+            if (lrank != rrank)
+                return lrank > rrank;
+            if (l.isDefinition() != r.isDefinition())
+                return l.isDefinition();
+            return l.location < r.location;
+        });
+}
+
+inline List<Symbol> sortTargets(Set<Symbol> &&set)
+{
+    List<Symbol> targets;
+    targets.resize(set.size());
+    size_t i=0;
+    for (auto &sym : set) {
+        targets[i++] = std::move(sym);
+    }
+    sortTargets(targets);
+    return targets;
+}
+
+inline List<Symbol> sortTargets(const Set<Symbol> &set)
+{
+    return sortTargets(Set<Symbol>(set));
+}
+
 inline String xmlEscape(const String& xml)
 {
     if (xml.isEmpty())
@@ -744,235 +838,51 @@ inline Location createLocation(const CXCursor &cursor, int *offsetPtr = 0)
 {
     return createLocation(clang_getCursorLocation(cursor), offsetPtr);
 }
+
+inline bool isValid(const CXCursor &cursor)
+{
+    return !!cursor;
 }
 
-namespace CommandLineParser {
-template <typename T>
-struct Option {
-    const T option;
-    const char *longOpt;
-    const char shortOpt;
-    const int argument;
-    const String description;
-};
-enum ParseStatus {
-    Parse_Exec,
-    Parse_Ok,
-    Parse_Error
-};
-enum Flag {
-    NoFlag = 0x0,
-    IgnoreUnknown = 0x1
-};
-RCT_FLAGS(Flag);
-template <typename T>
-ParseStatus parse(int &argc, char **argv, const Option<T> *opts, size_t count, Flags<Flag> flags, const std::function<ParseStatus(T)> &handler)
+inline bool isValid(CXCursorKind kind)
 {
-    optind = 1;
-#ifdef OS_Darwin
-    optreset = 1;
-#endif
-    opterr = (flags & IgnoreUnknown) ? 0 : 1;
-    Hash<int, const Option<T> *> shortOptions, longOptions;
-    List<option> options;
-    String shortOptionsString;
+    return !clang_isInvalid(kind);
+}
+inline bool isValid(const CXSourceLocation &location)
+{
+    return !!location;
+}
+}
 
-    for (size_t i=0; i<count; ++i) {
-        if (opts[i].option) {
-            const option opt = { opts[i].longOpt, opts[i].argument, 0, opts[i].shortOpt };
-            if (opts[i].shortOpt) {
-                shortOptionsString.append(opts[i].shortOpt);
-                switch (opts[i].argument) {
-                case no_argument:
-                    break;
-                case required_argument:
-                    shortOptionsString.append(':');
-                    break;
-                case optional_argument:
-                    shortOptionsString.append("::");
-                    break;
-                }
-                assert(!shortOptions.contains(opts[i].shortOpt));
-                shortOptions[opts[i].shortOpt] = &opts[i];
-            }
-            if (opts[i].longOpt)
-                longOptions[options.size()] = &opts[i];
-            options.push_back(opt);
-        }
-    }
-
-    if (getenv("RTAGS_DUMP_UNUSED")) {
-        String unused;
-        for (int i=0; i<26; ++i) {
-            if (!shortOptionsString.contains('a' + i))
-                unused.append('a' + i);
-            if (!shortOptionsString.contains('A' + i))
-                unused.append('A' + i);
-        }
-        printf("Unused: %s\n", unused.constData());
-        for (size_t i=0; i<count; ++i) {
-            if (opts[i].longOpt) {
-                if (!opts[i].shortOpt) {
-                    printf("No shortoption for %s\n", opts[i].longOpt);
-                } else if (opts[i].longOpt[0] != opts[i].shortOpt) {
-                    printf("Not ideal option for %s|%c\n", opts[i].longOpt, opts[i].shortOpt);
-                }
-            }
-        }
-        return Parse_Ok;
-    }
-
+namespace std
+{
+template <> struct hash<CXCursor> : public unary_function<CXCursor, size_t>
+{
+    size_t operator()(const CXCursor &value) const
     {
-        const option opt = { 0, 0, 0, 0 };
-        options.push_back(opt);
+        return clang_hashCursor(value);
     }
-
-    ParseStatus ret = Parse_Exec;
-    while (ret == Parse_Exec) {
-        int idx = -1;
-        const int c = getopt_long(argc, argv, shortOptionsString.constData(), options.data(), &idx);
-        switch (c) {
-        case -1:
-            return ret;
-        case '?':
-        case ':':
-            if (!(flags & IgnoreUnknown))
-                return Parse_Error;
-            continue;
-        default:
-            break;
-        }
-
-        const Option<T> *opt = (idx == -1 ? shortOptions.value(c) : longOptions.value(idx));
-        assert(opt);
-        assert(opt->option);
-        ret = handler(opt->option);
-    }
-    if (ret == Parse_Exec && optind < argc) {
-        fprintf(stderr, "unexpected option -- '%s'\n", argv[optind]);
-        return Parse_Error;
-    }
-
-    return ret;
-}
-template <typename T>
-static void help(FILE *f, const char* app, const Option<T> *opts, size_t count)
-{
-    List<String> out;
-    int longest = 0;
-    for (size_t i=0; i<count; ++i) {
-        if (!opts[i].longOpt && !opts[i].shortOpt) {
-            out.append(String());
-        } else {
-            out.append(String::format<64>("  %s%s%s%s",
-                                          opts[i].longOpt ? String::format<4>("--%s", opts[i].longOpt).constData() : "",
-                                          opts[i].longOpt && opts[i].shortOpt ? "|" : "",
-                                          opts[i].shortOpt ? String::format<2>("-%c", opts[i].shortOpt).constData() : "",
-                                          opts[i].argument == required_argument ? " [arg] "
-                                          : opts[i].argument == optional_argument ? " [optional] " : ""));
-            longest = std::max<int>(out[i].size(), longest);
-        }
-    }
-    fprintf(f, "%s options...\n", app);
-    const size_t c = out.size();
-    for (size_t i=0; i<c; ++i) {
-        if (out.at(i).isEmpty()) {
-            fprintf(f, "%s\n", opts[i].description.constData());
-        } else {
-            fprintf(f, "%s%s %s\n",
-                    out.at(i).constData(),
-                    String(longest - out.at(i).size(), ' ').constData(),
-                    opts[i].description.constData());
-        }
-    }
-}
-
-template <typename T>
-static void man(const Option<T> *opts, size_t count)
-{
-    String out = ("<!DOCTYPE manpage SYSTEM \"http://masqmail.cx/xmltoman/xmltoman.dtd\">\n"
-                  "<?xml-stylesheet type=\"text/xsl\" href=\"http://masqmail.cx/xmltoman/xmltoman.xsl\"?>\n"
-                  "\n"
-                  "<manpage name=\"rc\" section=\"1\" desc=\"command line client for RTags\">\n"
-                  "\n"
-                  "<synopsis>\n"
-                  "  <cmd>rc <arg>file.1.xml</arg> > file.1</cmd>\n"
-                  "</synopsis>\n"
-                  "\n"
-                  "<description>\n"
-                  "\n"
-                  "<p>rc is a command line client used to control RTags.</p>\n"
-                  "\n"
-                  "</description>\n");
-    for (size_t i=0; i<count; ++i) {
-        if (!opts[i].description.isEmpty()) {
-            if (!opts[i].longOpt && !opts[i].shortOpt) {
-                if (i)
-                    out.append("</section>\n");
-                out.append(String::format<128>("<section name=\"%s\">\n", opts[i].description.constData()));
-            } else {
-                out.append(String::format<64>("  <option>%s%s%s%s<optdesc>%s</optdesc></option>\n",
-                                              opts[i].longOpt ? String::format<4>("--%s", opts[i].longOpt).constData() : "",
-                                              opts[i].longOpt && opts[i].shortOpt ? "|" : "",
-                                              opts[i].shortOpt ? String::format<2>("-%c", opts[i].shortOpt).constData() : "",
-                                              opts[i].argument == required_argument ? " [arg] "
-                                              : opts[i].argument == optional_argument ? " [optional] " : "",
-                                              opts[i].description.constData()));
-            }
-        }
-    }
-    out.append("</section>\n"
-               "<section name=\"Authors\">\n"
-               "  <p>RTags was written by Jan Erik Hanssen &lt;jhanssen@gmail.com&gt; and Anders Bakken &lt;abakken@gmail.com&gt;</p>\n"
-               "</section>\n"
-               "<section name=\"See also\">\n"
-               "  <p><manref name=\"rdm\" section=\"1\"/></p>\n"
-               "</section>\n"
-               "<section name=\"Comments\">\n"
-               "  <p>This man page was written using <manref name=\"xmltoman\" section=\"1\" href=\"http://masqmail.cx/xmltoman/\"/>.</p>\n"
-               "</section>\n"
-               "</manpage>\n");
-    printf("%s", out.constData());
-}
-}
-
-
-struct CompilationDataBaseInfo {
-    uint64_t lastModified;
-    List<String> environment;
-    Flags<IndexMessage::Flag> indexFlags;
 };
-
-inline Serializer &operator<<(Serializer &s, const CompilationDataBaseInfo &info)
-{
-    s << info.lastModified << Sandbox::encoded(info.environment) << info.indexFlags;
-    return s;
 }
 
-inline Deserializer &operator>>(Deserializer &s, CompilationDataBaseInfo &info)
+struct SourceCache
 {
-    s >> info.lastModified >> info.environment >> info.indexFlags;
-    Sandbox::decode(info.environment);
-    return s;
-}
+    Hash<Path, Map<String, String> > rtagsConfigCache;
+    Hash<Path, std::pair<Path, bool> > compilerCache; // bool signifies isCompiler, not just executable
+    struct AncestorCacheKey {
+        String string;
+        Flags<RTags::FindAncestorFlag> flags;
 
-inline bool operator==(const CXCursor &l, CXCursorKind r)
-{
-    return clang_getCursorKind(l) == r;
-}
-inline bool operator==(CXCursorKind l, const CXCursor &r)
-{
-    return l == clang_getCursorKind(r);
-}
-
-inline bool operator!=(const CXCursor &l, CXCursorKind r)
-{
-    return clang_getCursorKind(l) != r;
-}
-inline bool operator!=(CXCursorKind l, const CXCursor &r)
-{
-    return l != clang_getCursorKind(r);
-}
+        bool operator<(const AncestorCacheKey &other) const
+        {
+            const int cmp = string.compare(other.string);
+            if (cmp)
+                return cmp < 0;
+            return flags < other.flags;
+        }
+    };
+    Hash<Path, Map<AncestorCacheKey, Path> > ancestorCache;
+};
 
 inline Log operator<<(Log dbg, CXCursor cursor);
 inline Log operator<<(Log dbg, CXType type);
@@ -980,8 +890,6 @@ inline Log operator<<(Log dbg, CXCursorKind kind);
 inline Log operator<<(Log dbg, CXTypeKind kind);
 inline Log operator<<(Log dbg, CXLinkageKind kind);
 
-inline bool operator==(const CXCursor &l, const CXCursor &r) { return clang_equalCursors(l, r); }
-inline bool operator!=(const CXCursor &l, const CXCursor &r) { return !clang_equalCursors(l, r); }
 class CXStringScope
 {
 public:

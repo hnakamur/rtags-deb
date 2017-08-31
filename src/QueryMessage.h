@@ -41,7 +41,7 @@ public:
         DeleteProject,
         Dependencies,
         Diagnose,
-        DumpCompilationDatabase,
+        DumpCompileCommands,
         DumpCompletions,
         DumpFile,
         DumpFileMaps,
@@ -68,6 +68,7 @@ public:
         Status,
         Suspend,
         SymbolInfo,
+        Validate,
 #ifdef RTAGS_HAS_LUA
         VisitAST,
 #endif
@@ -94,33 +95,35 @@ public:
         SymbolInfoIncludeBaseClasses = (1ull << 15),
         DeclarationOnly = (1ull << 16),
         DefinitionOnly = (1ull << 17),
-        AllTargets = (1ull << 18),
+        TargetUsrs = (1ull << 18),
         CursorKind = (1ull << 19),
         DisplayName = (1ull << 20),
         CompilationFlagsOnly = (1ull << 21),
         CompilationFlagsSplitLine = (1ull << 22),
-        DumpIncludeHeaders = (1ull << 23),
-        SilentQuery = (1ull << 24),
-        SynchronousCompletions = (1ull << 25),
-        NoSortReferencesByInput = (1ull << 26),
-        HasLocation = (1ull << 27),
-        WildcardSymbolNames = (1ull << 28),
-        NoColor = (1ull << 29),
-        Rename = (1ull << 30),
-        ContainingFunction = (1ull << 31),
-        ContainingFunctionLocation = (1ull << 32),
-        DumpCheckIncludes = (1ull << 33),
-        CurrentProjectOnly = (1ull << 34),
-        Wait = (1ull << 35),
-        CodeCompleteIncludeMacros = (1ull << 36),
-        XML = (1ull << 37),
-        NoSpellChecking = (1ull << 38),
-        CodeCompleteIncludes = (1ull << 39),
-        TokensIncludeSymbols = (1ull << 40),
-        JSON = (1ull << 41),
-        CodeCompletionEnabled = (1ull << 42),
-        SynchronousDiagnostics = (1ull << 43),
-        CodeCompleteNoWait = (1ull << 44)
+        CompilationFlagsPwd = (1ull << 23),
+        DumpIncludeHeaders = (1ull << 24),
+        SilentQuery = (1ull << 25),
+        SynchronousCompletions = (1ull << 26),
+        NoSortReferencesByInput = (1ull << 27),
+        HasLocation = (1ull << 28),
+        WildcardSymbolNames = (1ull << 29),
+        NoColor = (1ull << 30),
+        Rename = (1ull << 31),
+        ContainingFunction = (1ull << 32),
+        ContainingFunctionLocation = (1ull << 33),
+        DumpCheckIncludes = (1ull << 34),
+        CurrentProjectOnly = (1ull << 35),
+        Wait = (1ull << 36),
+        CodeCompleteIncludeMacros = (1ull << 37),
+        XML = (1ull << 38),
+        NoSpellChecking = (1ull << 39),
+        CodeCompleteIncludes = (1ull << 40),
+        TokensIncludeSymbols = (1ull << 41),
+        JSON = (1ull << 42),
+        CodeCompletionEnabled = (1ull << 43),
+        SynchronousDiagnostics = (1ull << 44),
+        CodeCompleteNoWait = (1ull << 45),
+        AllTargets = (1ull << 46)
     };
 
     QueryMessage(Type type = Invalid);
@@ -165,9 +168,9 @@ public:
         }
     };
     const List<PathFilter> &pathFilters() const { return mPathFilters; }
-    void setPathFilters(const Set<PathFilter> &pathFilters)
+    void setPathFilters(const Set<PathFilter> &filters)
     {
-        mPathFilters = pathFilters.toList();
+        mPathFilters = filters.toList();
         std::sort(mPathFilters.begin(), mPathFilters.end());
     }
 
@@ -187,7 +190,7 @@ public:
     {
         return Location::decode(mQuery, flag);
     }
-    void setQuery(const String &query) { mQuery = query; }
+    void setQuery(String &&query) { mQuery = std::move(query); }
     void setBuildIndex(int index) { mBuildIndex = index; }
     int buildIndex() const { return mBuildIndex; }
 
@@ -236,8 +239,11 @@ public:
 
     void setCurrentFile(const Path &currentFile) { mCurrentFile = currentFile; }
     Path currentFile() const { return mCurrentFile; }
+
+    String codeCompletePrefix() const { return mCodeCompletePrefix; }
+    void setCodeCompletePrefix(String &&prefix) { mCodeCompletePrefix = std::move(prefix); }
 private:
-    String mQuery;
+    String mQuery, mCodeCompletePrefix;
     Type mType;
     Flags<QueryMessage::Flag> mFlags;
     int mMax, mMinLine, mMaxLine, mBuildIndex;
