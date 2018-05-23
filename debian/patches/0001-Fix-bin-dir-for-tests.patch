@@ -1,0 +1,21 @@
+From: Hiroaki Nakamura <hnakamur@gmail.com>
+Date: Wed, 23 May 2018 12:08:35 +0900
+Subject: Fix bin dir for tests
+
+---
+ CMakeLists.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 4284e30..e7accfe 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -87,7 +87,7 @@ set(BIN ${CMAKE_INSTALL_PREFIX}/bin)
+ if (RTAGS_NO_INSTALL)
+     set(BIN ${CMAKE_BINARY_DIR}/bin)
+ endif ()
+-add_test(SBRootTest perl "${CMAKE_SOURCE_DIR}/tests/sbroot/sbroot_test.pl" "${BIN}")
++add_test(SBRootTest perl "${CMAKE_SOURCE_DIR}/tests/sbroot/sbroot_test.pl" "${CMAKE_BINARY_DIR}/bin")
+ find_program(NOSETEST NAMES nosetests nosetests-2.7 PATHS "$ENV{HOME}/.local/bin")
+ if (NOSETEST)
+     add_test(nosetests ${NOSETEST} -w ${CMAKE_SOURCE_DIR} -v)
