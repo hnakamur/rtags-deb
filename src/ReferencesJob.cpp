@@ -146,7 +146,6 @@ int ReferencesJob::execute()
         }
     }
     Flags<QueryJob::WriteFlag> writeFlags;
-    Flags<Location::ToStringFlag> kf = locationToStringFlags();
     if (queryFlags() & QueryMessage::Elisp) {
         write("(list ", DontQuote);
         writeFlags |= QueryJob::NoContext;
@@ -162,7 +161,7 @@ int ReferencesJob::execute()
     };
 
     Value json;
-    auto writeLoc = [this, writeCons, writeFlags, kf, &json](Location loc) {
+    auto writeLoc = [this, writeCons, writeFlags, &json](Location loc) {
         if (queryFlags() & QueryMessage::Elisp) {
             if (!filterLocation(loc))
                 return;

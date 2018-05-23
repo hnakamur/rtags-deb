@@ -92,7 +92,8 @@ static const List<Path> sSystemIncludePaths = {
 
 Server *Server::sInstance = 0;
 Server::Server()
-    : mSuspended(false), mEnvironment(Rct::environment()), mPollTimer(-1), mExitCode(0), mLastFileId(0), mCompletionThread(0)
+    : mSuspended(false), mEnvironment(Rct::environment()), mPollTimer(-1), mExitCode(0),
+      mLastFileId(0), mCompletionThread(0), mHadActiveBuffers(false)
 {
     assert(!sInstance);
     sInstance = this;
@@ -185,10 +186,12 @@ bool Server::init(const Options &options)
     {
         Log l(LogLevel::Error, LogOutput::StdOut|LogOutput::TrailingNewLine);
         l << "Running with" << mOptions.jobCount << "jobs, using args:"
-          << String::join(mOptions.defaultArguments, ' ') << '\n';
-        l << "Includepaths:";
-        for (const auto &inc : mOptions.includePaths)
-            l << inc.toString();
+          << String::join(mOptions.defaultArguments, ' ');
+        if (!mOptions.includePaths.isEmpty()) {
+            l << "\nIncludepaths:";
+            for (const auto &inc : mOptions.includePaths)
+                l << inc.toString();
+        }
     }
 
     if (mOptions.options & ClearProjects) {
@@ -332,7 +335,9 @@ std::shared_ptr<Project> Server::addProject(const Path &path)
     std::shared_ptr<Project> &project = mProjects[path];
     if (!project) {
         project.reset(new Project(path));
-        project->init();
+        if (!project->init()) {
+            Path::rmdir(project->projectDataDir());
+        }
     }
     return project;
 }
@@ -413,7 +418,7 @@ String Server::guessArguments(const String &args, const Path &pwd, const Path &p
     Set<Path> includePaths;
     List<String> ret;
     bool hasInput = false;
-    Set<String> roots;
+    Set<Path> roots;
     if (!projectRootOverride.isEmpty())
         roots.insert(projectRootOverride.ensureTrailingSlash());
     ret << "/usr/bin/g++"; // this should be clang on mac
@@ -502,7 +507,16 @@ bool Server::loadCompileCommands(IndexParseData &data, const Path &compileComman
         CXCompileCommand cmd = clang_CompileCommands_getCommand(cmds, i);
         String args;
         CXString str = clang_CompileCommand_getDirectory(cmd);
-        const Path compileDir = clang_getCString(str);
+        Path compileDir = clang_getCString(str);
+        if (!compileDir.isAbsolute() || !compileDir.exists()) {
+            bool resolveOk = false;
+            debug() << "compileDir doesn't exist: " << compileDir;
+            Path resolvedCompileDir = compileDir.resolved(Path::MakeAbsolute, data.project, &resolveOk);
+            if (resolveOk) {
+                compileDir = resolvedCompileDir;
+                debug() << "    resolved to: " << compileDir;
+            }
+        }
         clang_disposeString(str);
         const unsigned int num = clang_CompileCommand_getNumArgs(cmd);
         for (unsigned int j = 0; j < num; ++j) {
@@ -629,10 +643,12 @@ void Server::handleIndexMessage(const std::shared_ptr<IndexMessage> &message, co
         conn->finish(ret ? 0 : 1);
     if (ret) {
         auto proj = addProject(data.project);
-        assert(proj);
-        proj->processParseData(std::move(data));
-        if (!currentProject())
-            setCurrentProject(proj);
+        if (proj) {
+            assert(proj);
+            proj->processParseData(std::move(data));
+            if (!currentProject())
+                setCurrentProject(proj);
+        }
     }
 }
 
@@ -1009,7 +1025,7 @@ void Server::generateTest(const std::shared_ptr<QueryMessage> &query, const std:
         conn->finish();
         return;
     }
-    project->beginScope();
+    Project::FileMapScopeScope scope(project);
 
     const Source source = project->source(fileId, query->buildIndex());
     if (!source.isNull()) {
@@ -1059,7 +1075,6 @@ void Server::generateTest(const std::shared_ptr<QueryMessage> &query, const std:
         conn->write<256>("%s build: %d not found", query->query().constData(), query->buildIndex());
         conn->finish();
     }
-    project->endScope();
 }
 
 void Server::symbolInfo(const std::shared_ptr<QueryMessage> &query, const std::shared_ptr<Connection> &conn)
@@ -1446,6 +1461,7 @@ void Server::setCurrentProject(const std::shared_ptr<Project> &project)
             }
             if (!(mOptions.options & NoFileManager))
                 project->fileManager()->load(FileManager::Asynchronous);
+            mJobScheduler->sort();
             // project->diagnoseAll();
         } else {
             Path::rm(mOptions.dataDir + ".currentProject");
@@ -1703,7 +1719,11 @@ void Server::sources(const std::shared_ptr<QueryMessage> &query, const std::shar
     }
 
     if (std::shared_ptr<Project> project = currentProject()) {
-        project->indexParseData().write([&conn](const String &str) { return conn->write(str); });
+        if (query->flags() & (QueryMessage::CompilationFlagsOnly|QueryMessage::CompilationFlagsSplitLine|QueryMessage::CompilationFlagsPwd)) {
+            project->forEachSource([&conn, &format](const Source &source) { return conn->write(format(source)) ? Project::Continue : Project::Stop; });
+        } else {
+            project->indexParseData().write([&conn](const String &str) { return conn->write(str); });
+        }
     } else {
         conn->write("No project");
     }
@@ -1842,6 +1862,7 @@ void Server::setBuffers(const std::shared_ptr<QueryMessage> &query, const std::s
             conn->write(Location::path(fileId));
         }
     } else {
+        mHadActiveBuffers = true;
         Deserializer deserializer(encoded);
         int mode;
         deserializer >> mode;
@@ -1867,6 +1888,17 @@ void Server::setBuffers(const std::shared_ptr<QueryMessage> &query, const std::s
             conn->write<32>("Removed %zu buffers", oldCount - mActiveBuffers.size());
         } else {
             conn->write<32>("We still have %zu buffers", oldCount);
+        }
+
+        if (mOptions.options & TranslationUnitCache && mode <= 0) {
+            const Path cacheDir = mOptions.dataDir + "tucache";
+            cacheDir.visit([this](const Path &path) -> Path::VisitResult {
+                    if (path.isFile() && !mActiveBuffers.contains(std::stol(path.fileName()))) {
+                        error() << "Don't want" << path << "no more" << Location::path(std::stol(path.fileName()));
+                        Path::rm(path);
+                    }
+                    return Path::Continue;
+                });
         }
     }
     mJobScheduler->sort();
@@ -2008,7 +2040,11 @@ bool Server::load()
 
         Sandbox::decode(pathsToIds);
 
-        Location::init(pathsToIds);
+        if (!Location::init(pathsToIds)) {
+            error() << "Corrupted file ids. You have to start over";
+            clearProjects(Clear_All);
+            return true;
+        }
         List<Path> projects = mOptions.dataDir.files(Path::Directory);
         for (size_t i=0; i<projects.size(); ++i) {
             const Path &file = projects.at(i);
@@ -2079,8 +2115,10 @@ bool Server::load()
         }
         for (auto &s : projects) {
             auto p = addProject(s.first);
-            p->processParseData(std::move(s.second));
-            p->save();
+            if (p) {
+                p->processParseData(std::move(s.second));
+                p->save();
+            }
         }
     }
     return true;

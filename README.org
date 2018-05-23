@@ -191,11 +191,11 @@ sudo port install clang-3.5
 
   You can also download the sources from here:
 
-  https://andersbakken.github.io/rtags-releases/rtags-2.14.tar.bz2
+  https://andersbakken.github.io/rtags-releases/rtags-2.18.tar.bz2
 
   or
 
-  https://andersbakken.github.io/rtags-releases/rtags-2.14.tar.gz
+  https://andersbakken.github.io/rtags-releases/rtags-2.18.tar.gz
 
 - Building RTags
 
@@ -217,6 +217,15 @@ sudo port install clang-3.5
   Note that if you're trying to test RTags by indexing RTags' own
   source code you shouldn't build it in /tmp/ since RTags will refuse
   to index files in /tmp/
+  
+  "make install" runs ctest by default. If you want to skip ctest during install, 
+  you can pass -DSKIP_CTEST=True to cmake.
+
+  #+BEGIN_SRC sh
+  cmake .. -DSKIP_CTEST=True
+  make
+  make install
+  #+END_SRC
 
 - Elpa
 
@@ -580,6 +589,9 @@ also be socket acivated.
 
     =Systemd= will create the =rdm= socket automatically.
 
+    Note that user level systemd does not work on RHEL
+    derivatives. See here for more info: https://bugs.centos.org/view.php?id=8767
+
 If you prefer using SystemV something like this could be used:
 
 #+BEGIN_EXAMPLE
@@ -663,8 +675,8 @@ Sublime Text: https://github.com/rampage644/sublime-rtags
 
 Atom: https://github.com/artagnon/atomic-rtags, https://github.com/rajendrant/atom-rtags and https://github.com/sphaerophoria/atom-rtags-plus
 
-=rc= has a vast number of commands and options and we intend to write a man
-page at some point. Most users will have limited interest in ever calling them
+=rc= has a vast number of commands and options and we have written a
+man page for it. Most users will have limited interest in ever calling them
 manually and would rather just use the interactive elisp functions.
 
 * Elisp

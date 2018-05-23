@@ -5,13 +5,14 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 include(ExternalProject)
 
 if (RTAGS_BUILD_CLANG)
+    set(LIBCLANG_VERSION_STRING "5.0.0")
     if (RTAGS_NO_INSTALL)
         set(CLANG_INSTALL_PATH ${CMAKE_CURRENT_BINARY_DIR}/llvmclang-prefix/install)
     else ()
         set(CLANG_INSTALL_PATH ${CMAKE_INSTALL_PREFIX}/rtags-llvmclang)
     endif ()
     ExternalProject_Add(llvmclang
-        DOWNLOAD_COMMAND ${PROJECT_SOURCE_DIR}/scripts/getclang.sh 3.8.1
+        DOWNLOAD_COMMAND ${PROJECT_SOURCE_DIR}/scripts/getclang.sh "${LIBCLANG_VERSION_STRING}"
         SOURCE_DIR llvmclang-prefix/src/llvm
         CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${CLANG_INSTALL_PATH} -DLLVM_BUILD_TOOLS=1
         LOG_DOWNLOAD 1            # Wrap download in script to log output
@@ -22,9 +23,14 @@ if (RTAGS_BUILD_CLANG)
         LOG_INSTALL 1             # Wrap install in script to log output
         )
     if (CMAKE_SYSTEM_NAME MATCHES "Darwin")
+        set(CLANG_LIBRARY_NAME "libclang.dylib")
         add_definitions("-DCLANG_INCLUDE=${CLANG_INSTALL_PATH}/include/c++/v1") # add libcxx include
+    else ()
+        set(CLANG_LIBRARY_NAME "libclang.so")
     endif ()
-    set(LIBCLANG_LLVM_CONFIG_EXECUTABLE ${CLANG_INSTALL_PATH}/bin/llvm-config)
+    set(LIBCLANG_LIBRARIES ${CLANG_INSTALL_PATH}/lib/${CLANG_LIBRARY_NAME})
+    set(LIBCLANG_LIBDIR ${CLANG_INSTALL_PATH}/lib)
+    set(LIBCLANG_CXXFLAGS "-I${CLANG_INSTALL_PATH}/include")
 endif ()
 
 
@@ -317,11 +323,16 @@ install(TARGETS rdm rc rp RUNTIME DESTINATION bin COMPONENT rtags)
 install(FILES ../bin/gcc-rtags-wrapper.sh DESTINATION bin
     PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 install(FILES ../man/man7/rc.7 ../man/man7/rdm.7 DESTINATION share/man/man7/)
+
+if (UNIX AND NOT ${SKIP_CTEST})
+  install(CODE "execute_process(COMMAND ctest)")
+endif ()
+
 if (NOT RTAGS_NO_ELISP_FILES)
     install(FILES ${RTAGS_ELISP_SOURCES} DESTINATION ${RTAGS_ELISP_INSTALL_LOCATION})
 endif ()
 
 if (CLANGTEST_ENABLED)
-    add_executable(clangtest clangtest.c)
+    add_executable(clangtest clangtest.cpp)
     target_link_libraries(clangtest ${LIBCLANG_LIBRARIES})
 endif ()

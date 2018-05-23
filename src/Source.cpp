@@ -279,7 +279,7 @@ static inline bool isCompiler(const Path &fullPath, const List<String> &environm
 {
     if (Server::instance()->options().compilerWrappers.contains(fullPath.fileName()))
         return true;
-    if (strcasestr(fullPath.fileName(), "emacs"))
+    if (String(fullPath.fileName()).contains("emacs", String::CaseInsensitive))
         return false;
     static Hash<Path, bool> sCache;
 
@@ -289,8 +289,8 @@ static inline bool isCompiler(const Path &fullPath, const List<String> &environm
         return ret;
 
     char path[PATH_MAX];
-    strcpy(path, "/tmp/rtags-compiler-check-XXXXXX.c");
-    const int fd = mkstemps(path, 2);
+    strcpy(path, "/tmp/rtags-compiler-check-XXXXXX");
+    const int fd = mkstemp(path);
     if (fd == -1) {
         error("Failed to make temporary file errno: %d", errno);
         return false;
@@ -330,7 +330,7 @@ enum Mode {
 };
 static std::pair<Path, bool> resolveCompiler(const Path &unresolved,
                                              const Path &cwd,
-                                             const List<String> environment,
+                                             const List<String>& environment,
                                              const List<Path> &pathEnvironment,
                                              SourceCache *cache)
 {
@@ -716,11 +716,11 @@ SourceList Source::parse(const String &cmdLine,
             if (buildRoot.isDir())
                 buildRootId = Location::insertFile(buildRoot);
         }
-        const Flags<Server::Option> serverFlags = Server::instance() ? Server::instance()->options().options : NullFlags;
+        Flags<Server::Option> serverFlags = Server::instance() ? Server::instance()->options().options : NullFlags;
         includePathHash = ::hashIncludePaths(includePaths, buildRoot, serverFlags);
 
         ret.reserve(inputs.size());
-        for (const auto input : inputs) {
+        for (const auto& input : inputs) {
             unresolvedInputLocations->append(input.absolute);
             if (input.unmolested == "-")
                 continue;
@@ -780,7 +780,7 @@ static inline bool compareDefinesNoNDEBUG(const Set<Source::Define> &l, const Se
 
 static bool nextArg(List<String>::const_iterator &it,
                     const List<String>::const_iterator end,
-                    Flags<Server::Option> flags)
+                    const Flags<Server::Option> flags)
 {
     while (it != end) {
         if (isBlacklisted(*it)) {

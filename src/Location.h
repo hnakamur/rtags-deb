@@ -265,39 +265,21 @@ public:
             func(it.first, it.second);
         }
     }
-    static void init(const Hash<Path, uint32_t> &pathsToIds)
-    {
-        LOCK();
-        sPathsToIds = pathsToIds;
-        sIdsToPaths.clear();
-        sLastId = 0;
-        for (const auto &it : sPathsToIds) {
-            sIdsToPaths[it.second] = it.first;
-            assert(!it.first.isEmpty());
-            sLastId = std::max(sLastId, it.second);
-        }
-    }
-
-    static void init(const Hash<uint32_t, Path> &idsToPaths)
-    {
-        LOCK();
-        sIdsToPaths = idsToPaths;
-        sPathsToIds.clear();
-        sLastId = 0;
-        for (const auto &it : sIdsToPaths) {
-            sPathsToIds[it.second] = it.first;
-            assert(!it.second.isEmpty());
-            sLastId = std::max(sLastId, it.first);
-        }
-    }
+    static bool init(const Hash<Path, uint32_t> &pathsToIds);
+    static void init(const Hash<uint32_t, Path> &idsToPaths);
 
     static void set(const Path &path, uint32_t fileId)
     {
         LOCK();
-        sPathsToIds[path] = fileId;
+        uint32_t &refId = sPathsToIds[path];
+        assert(!refId || refId == fileId);
+        refId = fileId;
         Path &p = sIdsToPaths[fileId];
-        if (p.isEmpty())
+        if (p.isEmpty()) {
             p = path;
+        } else {
+            assert(p == path || path.resolved() == p);
+        }
         sLastId = std::max(sLastId, fileId);
     }
 private:
