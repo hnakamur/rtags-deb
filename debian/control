@@ -2,8 +2,8 @@ Source: rtags
 Section: devel
 Priority: optional
 Maintainer: Hiroaki Nakamura <hnakamur@gmail.com>
-Build-Depends: debhelper (>= 8.0.0), llvm-4.0-dev (>= 4.0), libclang-4.0-dev (>= 4.0),
-               cmake (>= 2.8), gcc-7, g++-7,
+Build-Depends: debhelper (>= 8.0.0), llvm-6.0-dev (>= 6.0), libclang-6.0-dev (>= 6.0),
+               cmake (>= 2.8), gcc-8, g++-8,
                zlib1g-dev, libssl-dev, pkg-config
 Standards-Version: 3.9.4
 Homepage: https://github.com/Andersbakken/rtags
@@ -12,7 +12,7 @@ Homepage: https://github.com/Andersbakken/rtags
 
 Package: rtags
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, llvm-4.0 (>= 4.0), libclang1-4.0 (>= 4.0)
+Depends: ${shlibs:Depends}, ${misc:Depends}, llvm-6.0 (>= 6.0), libclang1-6.0 (>= 6.0)
 Suggests: emacs 
 Description: C/C++ code indexer, completion and navigation daemon 
  RTags is a client/server application that indexes C/C++ code and keeps a
