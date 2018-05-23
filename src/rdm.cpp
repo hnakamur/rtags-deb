@@ -170,6 +170,7 @@ enum OptionType {
     Separate32BitAnd64Bit,
     SourceIgnoreIncludePathDifferencesInUsr,
     MaxCrashCount,
+    MaxSocketWriteBufferSize,
     CompletionCacheSize,
     CompletionNoFilter,
     CompletionLogs,
@@ -207,6 +208,7 @@ enum OptionType {
     SandboxRoot,
     PollTimer,
     NoRealPath,
+    TranslationUnitCache,
     Noop
 };
 
@@ -318,6 +320,7 @@ int main(int argc, char** argv)
         { Separate32BitAnd64Bit, "separate-32-bit-and-64-bit", 0, CommandLineParser::NoValue, "Normally rdm doesn't consider -m32 and -m64 as different builds. Pass this if you want it to." },
         { SourceIgnoreIncludePathDifferencesInUsr, "ignore-include-path-differences-in-usr", 0, CommandLineParser::NoValue, "Don't consider sources that only differ in includepaths within /usr (not including /usr/home/) as different builds." },
         { MaxCrashCount, "max-crash-count", 'K', CommandLineParser::Required, "Max number of crashes before giving up a sourcefile (default " STR(DEFAULT_MAX_CRASH_COUNT) ")." },
+        { MaxSocketWriteBufferSize, "max-socket-write-buffer-size", 0, CommandLineParser::Required, "Max number of bytes buffered after EAGAIN." },
         { CompletionCacheSize, "completion-cache-size", 'i', CommandLineParser::Required, "Number of translation units to cache (default " STR(DEFAULT_COMPLETION_CACHE_SIZE) ")." },
         { CompletionNoFilter, "completion-no-filter", 0, CommandLineParser::NoValue, "Don't filter private members and destructors from completions." },
         { CompletionLogs, "completion-logs", 0, CommandLineParser::NoValue, "Log more info about completions." },
@@ -355,6 +358,7 @@ int main(int argc, char** argv)
         { SandboxRoot, "sandbox-root",  0, CommandLineParser::Required, "Create index using relative paths by stripping dir (enables copying of tag index db files without need to reindex)." },
         { PollTimer, "poll-timer", 0, CommandLineParser::Required, "Poll the database of the current project every <arg> seconds. " },
         { NoRealPath, "no-realpath", 0, CommandLineParser::NoValue, "Don't use realpath(3) for files" },
+        { TranslationUnitCache, "translation-unit-cache", 0, CommandLineParser::NoValue, "Cache translation units. Not working yet." },
         { Noop, "config", 'c', CommandLineParser::Required, "Use this file (instead of ~/.rdmrc)." },
         { Noop, "no-rc", 'N', CommandLineParser::NoValue, "Don't load any rc files." }
     };
@@ -565,6 +569,13 @@ int main(int argc, char** argv)
                 return { String::format<1024>("Invalid argument to -K %s", value.constData()), CommandLineParser::Parse_Error };
             }
             break; }
+        case MaxSocketWriteBufferSize: {
+            char *end;
+            serverOpts.maxSocketWriteBufferSize = strtoul(value.constData(), &end, 10);
+            if (*end || serverOpts.maxSocketWriteBufferSize < 0) {
+                return { String::format<1024>("Invalid argument to --max-socket-write-buffer-size %s", value.constData()), CommandLineParser::Parse_Error };
+            }
+            break; }
         case CompletionCacheSize: {
             serverOpts.completionCacheSize = atoi(value.constData());
             if (serverOpts.completionCacheSize <= 0) {
@@ -708,6 +719,9 @@ int main(int argc, char** argv)
         case NoRealPath: {
             Path::setRealPathEnabled(false);
             serverOpts.options |= Server::NoRealPath;
+            break; }
+        case TranslationUnitCache: {
+            serverOpts.options |= Server::TranslationUnitCache;
             break; }
         }
 

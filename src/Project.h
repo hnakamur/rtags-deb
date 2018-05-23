@@ -76,6 +76,7 @@ public:
     std::shared_ptr<FileManager> fileManager() const { return mFileManager; }
 
     Path path() const { return mPath; }
+    Path projectDataDir() const { return mProjectDataDir; }
     bool match(const Match &match, bool *indexed = 0) const;
 
     enum FileMapType {
@@ -235,6 +236,28 @@ public:
         serializer << mVisitedFiles;
     }
 
+    class FileMapScopeScope
+    {
+    public:
+        FileMapScopeScope(Project *p)
+            : mProject(p)
+        {
+            if (mProject)
+                mProject->beginScope();
+        }
+        FileMapScopeScope(const std::shared_ptr<Project> &p)
+            : FileMapScopeScope(p.get())
+        {}
+
+        ~FileMapScopeScope()
+        {
+            if (mProject)
+                mProject->endScope();
+        }
+    private:
+        Project *mProject;
+    };
+
     void beginScope();
     void endScope();
     void dirty(uint32_t fileId);
@@ -254,25 +277,26 @@ public:
         Continue,
         Remove // not allowed for const calls
     };
-    static void forEachSources(const IndexParseData &data, std::function<VisitResult(const Sources &sources)> cb);
-    static void forEachSources(IndexParseData &data, std::function<VisitResult(Sources &sources)> cb);
+    static void forEachSources(const IndexParseData &data, const std::function<VisitResult(const Sources &sources)>& cb);
+    static void forEachSources(IndexParseData &data, const std::function<VisitResult(Sources &sources)>& cb);
     void forEachSources(std::function<VisitResult(const Sources &sources)> cb) const { forEachSources(mIndexParseData, cb); }
     void forEachSources(std::function<VisitResult(Sources &sources)> cb) { forEachSources(mIndexParseData, cb); }
 
     static void forEachSourceList(const IndexParseData &data, std::function<VisitResult(const SourceList &sources)> cb);
     static void forEachSourceList(IndexParseData &data, std::function<VisitResult(SourceList &sources)> cb);
-    static void forEachSourceList(Sources &sources, std::function<VisitResult(SourceList &source)> cb);
-    static void forEachSourceList(const Sources &sources, std::function<VisitResult(const SourceList &source)> cb);
+    static void forEachSourceList(Sources &sources, const std::function<VisitResult(SourceList &source)>& cb);
+    static void forEachSourceList(const Sources &sources, const std::function<VisitResult(const SourceList &source)>& cb);
     void forEachSourceList(std::function<VisitResult(const SourceList &sources)> cb) const { forEachSourceList(mIndexParseData, cb); }
     void forEachSourceList(std::function<VisitResult(SourceList &sources)> cb) { forEachSourceList(mIndexParseData, cb); }
 
-    static void forEachSource(Sources &sources, std::function<VisitResult(Source &source)> cb);
-    static void forEachSource(const Sources &sources, std::function<VisitResult(const Source &source)> cb);
+    static void forEachSource(Sources &sources, const std::function<VisitResult(Source &source)>& cb);
+    static void forEachSource(const Sources &sources, const std::function<VisitResult(const Source &source)>& cb);
     static void forEachSource(IndexParseData &data, std::function<VisitResult(Source &source)> cb);
     static void forEachSource(const IndexParseData &data, std::function<VisitResult(const Source &source)> cb);
     void forEachSource(std::function<VisitResult(const Source &source)> cb) const { forEachSource(mIndexParseData, cb); }
     void forEachSource(std::function<VisitResult(Source &source)> cb) { forEachSource(mIndexParseData, cb); }
     void validateAll();
+    void updateDiagnostics(uint32_t fileId, const Diagnostics &diagnostics);
 private:
     void reloadCompileCommands();
     void onFileAddedOrModified(const Path &path);
@@ -286,12 +310,12 @@ private:
     void updateDependencies(uint32_t fileId, const std::shared_ptr<IndexDataMessage> &msg);
     void loadFailed(uint32_t fileId);
     void updateFixIts(const Set<uint32_t> &visited, FixIts &fixIts);
-    Diagnostics updateDiagnostics(const Diagnostics &diagnostics);
     int startDirtyJobs(Dirty *dirty,
                        Flags<IndexerJob::Flag> type,
                        const UnsavedFiles &unsavedFiles = UnsavedFiles(),
                        const std::shared_ptr<Connection> &wait = std::shared_ptr<Connection>());
     void onDirtyTimeout(Timer *);
+    bool isTemplateDiagnostic(const std::pair<Location, Diagnostic> &diagnostic);
 
     struct FileMapScope {
         FileMapScope(const std::shared_ptr<Project> &proj, int m)
@@ -405,7 +429,7 @@ private:
 
     std::shared_ptr<FileMapScope> mFileMapScope;
 
-    const Path mPath, mSourceFilePathBase;
+    const Path mPath, mProjectDataDir;
     Path mProjectFilePath, mSourcesFilePath;
 
     Files mFiles;
@@ -469,7 +493,7 @@ inline void Project::releaseFileIds(const Set<uint32_t> &fileIds)
 
 inline Path Project::sourceFilePath(uint32_t fileId, const char *type) const
 {
-    return String::format<1024>("%s%d/%s", mSourceFilePathBase.constData(), fileId, type);
+    return String::format<1024>("%s%d/%s", mProjectDataDir.constData(), fileId, type);
 }
 
 #endif

@@ -74,7 +74,7 @@ public:
         Progress = (1ull << 17),
         Weverything = (1ull << 18),
         NoComments = (1ull << 19),
-        Launchd = (1ull << 20),     /* Only valid for Darwin... but you're not out of bits yet. */
+        Launchd = (1ull << 20),
         RPLogToSyslog = (1ull << 21),
         CompletionsNoFilter = (1ull << 22),
         WatchSourcesOnly = (1ull << 23),
@@ -87,7 +87,8 @@ public:
         NoRealPath = (1ull << 30),
         Separate32BitAnd64Bit = (1ull << 31),
         SourceIgnoreIncludePathDifferencesInUsr = (1ull << 32),
-        NoLibClangIncludePath = (1ull << 33)
+        NoLibClangIncludePath = (1ull << 33),
+        TranslationUnitCache = (1ull << 34)
     };
     struct Options {
         Options()
@@ -95,7 +96,8 @@ public:
               rpVisitFileTimeout(0), rpIndexDataMessageTimeout(0), rpConnectTimeout(0),
               rpConnectAttempts(0), rpNiceValue(0), maxCrashCount(0),
               completionCacheSize(0), testTimeout(60 * 1000 * 5),
-              maxFileMapScopeCacheSize(512), pollTimer(0), tcpPort(0)
+              maxFileMapScopeCacheSize(512), pollTimer(0), maxSocketWriteBufferSize(0),
+              tcpPort(0)
         {
         }
 
@@ -105,7 +107,7 @@ public:
         int rpVisitFileTimeout, rpIndexDataMessageTimeout,
             rpConnectTimeout, rpConnectAttempts, rpNiceValue, maxCrashCount,
             completionCacheSize, testTimeout, maxFileMapScopeCacheSize, errorLimit,
-            pollTimer;
+            pollTimer, maxSocketWriteBufferSize;
         uint16_t tcpPort;
         List<String> defaultArguments, excludeFilters;
         Set<String> blockedArguments;
@@ -126,6 +128,7 @@ public:
     void dumpJobs(const std::shared_ptr<Connection> &conn);
     std::shared_ptr<JobScheduler> jobScheduler() const { return mJobScheduler; }
     const Set<uint32_t> &activeBuffers() const { return mActiveBuffers; }
+    bool hadActiveBuffers() const { return mHadActiveBuffers; }
     bool isActiveBuffer(uint32_t fileId) const { return mActiveBuffers.contains(fileId); }
     int exitCode() const { return mExitCode; }
     std::shared_ptr<Project> currentProject() const { return mCurrentProject.lock(); }
@@ -219,6 +222,7 @@ private:
     uint32_t mLastFileId;
     std::shared_ptr<JobScheduler> mJobScheduler;
     CompletionThread *mCompletionThread;
+    bool mHadActiveBuffers;
     Set<uint32_t> mActiveBuffers;
     Set<std::shared_ptr<Connection> > mConnections;
 
