@@ -1,3 +1,11 @@
+rtags (2.18-1ppa1~ubuntu18.04) bionic; urgency=medium
+
+  * New upstream version 2.18
+  * Update to gcc 8 and LLVM 6.0
+  * Switch target to Ubuntu 18.04
+
+ -- Hiroaki Nakamura <hnakamur@gmail.com>  Wed, 23 May 2018 11:17:39 +0900
+
 rtags (2.14-1hnakamur1) xenial; urgency=medium
 
   * Imported Upstream version 2.14
